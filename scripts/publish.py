@@ -105,10 +105,20 @@ def build_tarball_bytes(plugin_dir: Path) -> bytes:
             info.mode = 0o755 if (info.mode & 0o100) else 0o644
         return info
 
+    def _excluded(path: Path) -> bool:
+        # Skip Python bytecode artifacts. They're machine- and
+        # interpreter-version-specific and break tarball reproducibility
+        # across hosts.
+        if "__pycache__" in path.parts:
+            return True
+        if path.suffix in (".pyc", ".pyo"):
+            return True
+        return False
+
     buf = io.BytesIO()
     with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0, compresslevel=9) as gz:
         with tarfile.open(fileobj=gz, mode="w", format=tarfile.USTAR_FORMAT) as tf:
-            entries = sorted(plugin_dir.rglob("*"))
+            entries = [p for p in sorted(plugin_dir.rglob("*")) if not _excluded(p)]
             for path in entries:
                 if path.is_symlink():
                     raise PublishError(

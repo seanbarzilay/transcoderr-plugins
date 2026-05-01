@@ -1,0 +1,9 @@
+name = "whisper"
+version = "0.1.0"
+kind = "subprocess"
+entrypoint = "bin/run"
+provides_steps = ["whisper.transcribe"]
+summary = "Generates a sidecar .srt for the output file using faster-whisper. GPU auto-detected."
+min_transcoderr_version = "0.27.0"
+runtimes = ["python3", "ffprobe"]
+deps = "pip install --target ./libs faster-whisper nvidia-cublas-cu12 'nvidia-cudnn-cu12==9.*'"
