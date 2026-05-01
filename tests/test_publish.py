@@ -111,6 +111,13 @@ class LoadManifestTests(unittest.TestCase):
             pub.load_manifest(self.plugin, "demo")
         self.assertIn("manifest.toml", str(ctx.exception))
 
+    def test_invalid_toml_raises_publish_error(self):
+        self.plugin.mkdir()
+        (self.plugin / "manifest.toml").write_text("not [valid toml = ")
+        with self.assertRaises(pub.PublishError) as ctx:
+            pub.load_manifest(self.plugin, "demo")
+        self.assertIn("invalid TOML", str(ctx.exception))
+
 
 class IndexLookupTests(unittest.TestCase):
     def test_find_entry_returns_match(self):
@@ -384,6 +391,12 @@ class PublishIntegrationTests(unittest.TestCase):
         with self.assertRaises(pub.PublishError) as ctx:
             pub.publish("nonexistent", self.repo)
         self.assertIn("not found", str(ctx.exception))
+
+    def test_corrupt_index_raises_publish_error(self):
+        (self.repo / "index.json").write_text("not json {")
+        with self.assertRaises(pub.PublishError) as ctx:
+            pub.publish("demo", self.repo)
+        self.assertIn("index.json", str(ctx.exception))
 
 
 @contextlib.contextmanager

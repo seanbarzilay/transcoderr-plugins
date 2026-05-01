@@ -46,7 +46,12 @@ def load_manifest(plugin_dir: Path, expected_name: str) -> dict:
     if not manifest_path.exists():
         raise PublishError(f"manifest.toml not found at {manifest_path}")
     with manifest_path.open("rb") as f:
-        manifest = tomllib.load(f)
+        try:
+            manifest = tomllib.load(f)
+        except tomllib.TOMLDecodeError as exc:
+            raise PublishError(
+                f"manifest.toml is invalid TOML: {exc}"
+            ) from exc
     missing = [k for k in REQUIRED_MANIFEST_FIELDS if k not in manifest]
     if missing:
         raise PublishError(
@@ -178,7 +183,10 @@ def publish(plugin_name: str, repo_root: Path) -> str:
     new_version = manifest["version"]
 
     index_path = repo_root / "index.json"
-    index = json.loads(index_path.read_text())
+    try:
+        index = json.loads(index_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PublishError(f"could not read index.json: {exc}") from exc
     existing = find_entry(index, plugin_name)
     check_version_conflict(existing, new_version, plugin_name)
 
