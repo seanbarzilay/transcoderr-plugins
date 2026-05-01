@@ -59,6 +59,24 @@ def write_srt_atomically(path: Path, srt_text: str) -> None:
     os.replace(tmp, path)
 
 
+def find_existing_sidecar(video_path: Path, language: str | None) -> Path | None:
+    """Return an existing sidecar .srt for video_path, or None.
+
+    With `language` set to an ISO code, checks for `<basename>.<lang>.srt`
+    exactly. With `language=None` (autodetect), returns the first
+    `<basename>.*.srt` that exists. `<basename>` here means the filename
+    with only its rightmost extension stripped — `Movie.2024.1080p.mkv`
+    yields a base of `Movie.2024.1080p` so dot-separated quality tags
+    are preserved.
+    """
+    if language is not None:
+        candidate = video_path.with_name(f"{video_path.stem}.{language}.srt")
+        return candidate if candidate.exists() else None
+    pattern = str(video_path.with_suffix("")) + ".*.srt"
+    matches = sorted(glob(pattern))
+    return Path(matches[0]) if matches else None
+
+
 def main(stdin=None, stdout=None) -> int:
     """Entry point. Reads init+execute from stdin, emits events to stdout."""
     raise NotImplementedError("filled in by Task 9")

@@ -110,5 +110,60 @@ class WriteSrtAtomicallyTests(unittest.TestCase):
             plugin.write_srt_atomically(target, "x")
 
 
+class FindExistingSidecarTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.video = self.dir / "Movie.mkv"
+        self.video.write_text("")  # empty placeholder
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_returns_none_when_no_sidecar_exists(self):
+        self.assertIsNone(plugin.find_existing_sidecar(self.video, "en"))
+        self.assertIsNone(plugin.find_existing_sidecar(self.video, None))
+
+    def test_exact_match_when_language_fixed(self):
+        sidecar = self.dir / "Movie.en.srt"
+        sidecar.write_text("")
+        self.assertEqual(plugin.find_existing_sidecar(self.video, "en"), sidecar)
+
+    def test_no_match_when_language_fixed_but_only_other_lang_present(self):
+        (self.dir / "Movie.fr.srt").write_text("")
+        self.assertIsNone(plugin.find_existing_sidecar(self.video, "en"))
+
+    def test_any_lang_match_when_language_is_none(self):
+        sidecar = self.dir / "Movie.fr.srt"
+        sidecar.write_text("")
+        # find_existing_sidecar with None returns the FIRST match found.
+        # The exact path (which one of several) is unimportant — any
+        # truthy return value is treated as "skip".
+        result = plugin.find_existing_sidecar(self.video, None)
+        self.assertEqual(result, sidecar)
+
+    def test_no_match_for_different_basename(self):
+        (self.dir / "OtherMovie.en.srt").write_text("")
+        self.assertIsNone(plugin.find_existing_sidecar(self.video, None))
+
+    def test_does_not_match_the_video_file_itself(self):
+        # Movie.mkv exists but isn't a .srt — must not be confused for one.
+        self.assertIsNone(plugin.find_existing_sidecar(self.video, None))
+
+    def test_preserves_dot_separated_quality_tags_in_filename(self):
+        # Files like "Movie.2024.1080p.mkv" must look for sidecars at
+        # "Movie.2024.1080p.<lang>.srt", not "Movie.2024.<lang>.srt".
+        complex_video = self.dir / "Movie.2024.1080p.mkv"
+        complex_video.write_text("")
+        sidecar = self.dir / "Movie.2024.1080p.en.srt"
+        sidecar.write_text("")
+        # Wrong-prefix sidecar that must NOT be matched.
+        (self.dir / "Movie.2024.en.srt").write_text("")
+        self.assertEqual(
+            plugin.find_existing_sidecar(complex_video, "en"),
+            sidecar,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
