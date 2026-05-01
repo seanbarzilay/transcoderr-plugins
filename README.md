@@ -61,7 +61,8 @@ To re-publish an existing plugin, bump `version` in `manifest.toml` and
 run the workflow again. The script refuses to re-use an already-listed
 version.
 
-You can also run the script locally to validate before opening a PR:
+You can also run the script locally to validate before opening a PR
+(requires Python 3.11+ for `tomllib`):
 
 ```bash
 python3 scripts/publish.py <plugin-name>
