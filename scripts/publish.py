@@ -40,6 +40,26 @@ def parse_owner_repo(origin_url: str) -> tuple[str, str]:
     return m.group(1), m.group(2)
 
 
+def load_manifest(plugin_dir: Path, expected_name: str) -> dict:
+    """Parse manifest.toml from plugin_dir and validate its required fields."""
+    manifest_path = plugin_dir / "manifest.toml"
+    if not manifest_path.exists():
+        raise PublishError(f"manifest.toml not found at {manifest_path}")
+    with manifest_path.open("rb") as f:
+        manifest = tomllib.load(f)
+    missing = [k for k in REQUIRED_MANIFEST_FIELDS if k not in manifest]
+    if missing:
+        raise PublishError(
+            f"manifest.toml is missing required fields: {', '.join(missing)}"
+        )
+    if manifest["name"] != expected_name:
+        raise PublishError(
+            f"manifest.name {manifest['name']!r} doesn't match plugin dir "
+            f"{expected_name!r}"
+        )
+    return manifest
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plugin", help="plugin directory name")
