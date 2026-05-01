@@ -204,5 +204,41 @@ class BuildTarballTests(unittest.TestCase):
         self.assertEqual(manifest_member.mode, 0o644)
 
 
+class BuildEntryTests(unittest.TestCase):
+    def test_field_mapping(self):
+        manifest = {
+            "name": "demo",
+            "version": "0.2.0",
+            "kind": "subprocess",
+            "entrypoint": "bin/run",
+            "provides_steps": ["demo.before", "demo.after"],
+            "summary": "demo summary",
+            "min_transcoderr_version": "0.19.0",
+        }
+        entry = pub.build_entry(manifest, "foo", "bar", "deadbeef" * 8)
+        self.assertEqual(entry, {
+            "name": "demo",
+            "version": "0.2.0",
+            "summary": "demo summary",
+            "tarball_url": "https://raw.githubusercontent.com/foo/bar/main/tarballs/demo-0.2.0.tar.gz",
+            "tarball_sha256": "deadbeef" * 8,
+            "homepage": "https://github.com/foo/bar/tree/main/demo",
+            "min_transcoderr_version": "0.19.0",
+            "kind": "subprocess",
+            "provides_steps": ["demo.before", "demo.after"],
+        })
+
+    def test_provides_steps_is_a_new_list(self):
+        steps = ["a"]
+        manifest = {
+            "name": "x", "version": "1", "kind": "subprocess",
+            "entrypoint": "e", "provides_steps": steps,
+            "summary": "s", "min_transcoderr_version": "0",
+        }
+        entry = pub.build_entry(manifest, "o", "r", "sha")
+        entry["provides_steps"].append("mutated")
+        self.assertEqual(steps, ["a"])  # original is untouched
+
+
 if __name__ == "__main__":
     unittest.main()

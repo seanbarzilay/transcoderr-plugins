@@ -116,6 +116,26 @@ def build_tarball_bytes(plugin_dir: Path) -> bytes:
     return buf.getvalue()
 
 
+def build_entry(manifest: dict, owner: str, repo: str, sha256: str) -> dict:
+    """Build the index.json entry dict from a manifest + repo identity + sha."""
+    name = manifest["name"]
+    version = manifest["version"]
+    return {
+        "name": name,
+        "version": version,
+        "summary": manifest["summary"],
+        "tarball_url": (
+            f"https://raw.githubusercontent.com/{owner}/{repo}/main/"
+            f"tarballs/{name}-{version}.tar.gz"
+        ),
+        "tarball_sha256": sha256,
+        "homepage": f"https://github.com/{owner}/{repo}/tree/main/{name}",
+        "min_transcoderr_version": manifest["min_transcoderr_version"],
+        "kind": manifest["kind"],
+        "provides_steps": list(manifest["provides_steps"]),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plugin", help="plugin directory name")
