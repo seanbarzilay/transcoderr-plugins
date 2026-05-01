@@ -179,9 +179,103 @@ def has_audio_stream(file_path: Path) -> bool:
     return bool(data.get("streams"))
 
 
+def load_model(model_name: str, device: str, compute_type: str):
+    """Load a faster-whisper model. Indirected so tests can monkeypatch."""
+    from faster_whisper import WhisperModel  # noqa: WPS433 (lazy import)
+    return WhisperModel(model_name, device=device, compute_type=compute_type)
+
+
+def transcribe(file_path: Path, config: dict, *, stdout) -> dict | None:
+    """Transcribe file_path. Returns ctx dict on success, or None on benign skip.
+
+    Benign skips (no-audio, sidecar-already-exists, no-speech) emit a
+    log event but no context_set. Errors raise; the caller maps them to
+    result events.
+    """
+    if not file_path.exists():
+        raise ProtocolError("file does not exist")
+
+    if not has_audio_stream(file_path):
+        emit_log("no audio stream, skipping", out=stdout)
+        return None
+
+    skip_lang = None if config["language"] == "auto" else config["language"]
+    if config["skip_if_exists"]:
+        existing = find_existing_sidecar(file_path, skip_lang)
+        if existing is not None:
+            emit_log(f"sidecar already exists at {existing}, skipping", out=stdout)
+            return None
+
+    compute_type = resolve_compute_type(config["compute_type"])
+    model = load_model(config["model"], device="auto", compute_type=compute_type)
+
+    started = time.monotonic()
+    segments_iter, info = model.transcribe(
+        str(file_path),
+        language=skip_lang,
+        vad_filter=True,
+    )
+    segments = list(segments_iter)
+
+    if not segments:
+        emit_log("no speech detected, skipping", out=stdout)
+        return None
+
+    srt_text = format_srt(segments)
+    sidecar = file_path.with_suffix(f".{info.language}.srt")
+    write_srt_atomically(sidecar, srt_text)
+
+    elapsed = time.monotonic() - started
+    return {
+        "subtitle_path": str(sidecar),
+        "language": info.language,
+        "model": config["model"],
+        "duration_sec": round(elapsed, 3),
+    }
+
+
 def main(stdin=None, stdout=None) -> int:
-    """Entry point. Reads init+execute from stdin, emits events to stdout."""
-    raise NotImplementedError("filled in by Task 9")
+    """Read init+execute from stdin, drive transcribe, emit events to stdout."""
+    stdin = stdin if stdin is not None else sys.stdin
+    stdout = stdout if stdout is not None else sys.stdout
+
+    try:
+        _init_line = stdin.readline()
+        if not _init_line:
+            emit_result_err("no init message on stdin", out=stdout)
+            return 0
+        exec_line = stdin.readline()
+        if not exec_line:
+            emit_result_err("no execute message on stdin", out=stdout)
+            return 0
+
+        try:
+            parsed = parse_execute(exec_line)
+        except ProtocolError as exc:
+            emit_result_err(str(exc), out=stdout)
+            return 0
+
+        if parsed["step_id"] != "whisper.transcribe":
+            emit_result_err(f"unknown step_id: {parsed['step_id']}", out=stdout)
+            return 0
+
+        try:
+            ctx_value = transcribe(
+                Path(parsed["file_path"]),
+                parsed["config"],
+                stdout=stdout,
+            )
+        except ProtocolError as exc:
+            emit_result_err(str(exc), out=stdout)
+            return 0
+
+        if ctx_value is not None:
+            emit_context_set("whisper", ctx_value, out=stdout)
+        emit_result_ok(out=stdout)
+        return 0
+    except Exception as exc:  # noqa: BLE001 — last-resort guard
+        emit_result_err(f"unexpected error: {exc}", out=stdout)
+        return 0
 
 
 if __name__ == "__main__":

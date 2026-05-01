@@ -310,5 +310,122 @@ class HasAudioStreamTests(unittest.TestCase):
             self.assertIn("ffprobe", str(ctx.exception).lower())
 
 
+class _FakeInfo:
+    def __init__(self, language: str):
+        self.language = language
+
+
+class _FakeModel:
+    def __init__(self, segments, language="en"):
+        self._segments = segments
+        self._language = language
+
+    def transcribe(self, file_path, language=None, vad_filter=True):
+        return iter(self._segments), _FakeInfo(self._language)
+
+
+def _read_events(stdout: io.StringIO) -> list:
+    return [json.loads(l) for l in stdout.getvalue().splitlines() if l.strip()]
+
+
+class MainTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.video = self.dir / "Movie.mkv"
+        self.video.write_text("video bytes")  # presence is enough
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _run(self, *, file_path=None, config=None, model=None, has_audio=True):
+        file_path = file_path if file_path is not None else self.video
+        config = config or {}
+        model = model or _FakeModel(
+            segments=[_Segment(0.0, 1.0, "Hello.")],
+            language="en",
+        )
+        stdin = io.StringIO()
+        stdin.write('{"event":"init"}\n')
+        stdin.write(json.dumps({
+            "step_id": "whisper.transcribe",
+            "ctx": {"file": {"path": str(file_path)}},
+            "config": config,
+        }) + "\n")
+        stdin.seek(0)
+        stdout = io.StringIO()
+        with mock.patch.object(plugin, "load_model", return_value=model), \
+             mock.patch.object(plugin, "has_audio_stream", return_value=has_audio):
+            rc = plugin.main(stdin=stdin, stdout=stdout)
+        return rc, _read_events(stdout)
+
+    def test_happy_path_writes_srt_and_emits_context(self):
+        rc, events = self._run()
+        self.assertEqual(rc, 0)
+
+        sidecar = self.dir / "Movie.en.srt"
+        self.assertTrue(sidecar.exists())
+        self.assertIn("Hello.", sidecar.read_text())
+
+        kinds = [e["event"] for e in events]
+        self.assertIn("context_set", kinds)
+        self.assertEqual(events[-1], {"event": "result", "status": "ok", "outputs": {}})
+
+        ctx_set = next(e for e in events if e["event"] == "context_set")
+        self.assertEqual(ctx_set["key"], "whisper")
+        self.assertEqual(ctx_set["value"]["language"], "en")
+        self.assertEqual(ctx_set["value"]["model"], "large-v3-turbo")
+        self.assertEqual(ctx_set["value"]["subtitle_path"], str(sidecar))
+        self.assertGreaterEqual(ctx_set["value"]["duration_sec"], 0.0)
+
+    def test_missing_file_returns_error(self):
+        rc, events = self._run(file_path=self.dir / "nope.mkv")
+        self.assertEqual(rc, 0)  # main always exits 0; failure is in the result event
+        self.assertEqual(events[-1]["status"], "error")
+        self.assertIn("does not exist", events[-1]["error"]["msg"])
+
+    def test_no_audio_stream_skips_with_log_and_ok(self):
+        rc, events = self._run(has_audio=False)
+        self.assertEqual(rc, 0)
+        self.assertFalse((self.dir / "Movie.en.srt").exists())
+        self.assertEqual(events[-1]["status"], "ok")
+        kinds = [e["event"] for e in events]
+        self.assertIn("log", kinds)
+        self.assertNotIn("context_set", kinds)
+
+    def test_skip_if_exists_with_existing_sidecar(self):
+        (self.dir / "Movie.en.srt").write_text("existing")
+        rc, events = self._run(config={"language": "en", "skip_if_exists": True})
+        self.assertEqual(rc, 0)
+        self.assertEqual((self.dir / "Movie.en.srt").read_text(), "existing")
+        self.assertEqual(events[-1]["status"], "ok")
+        kinds = [e["event"] for e in events]
+        self.assertNotIn("context_set", kinds)
+
+    def test_no_speech_detected_emits_ok_without_srt(self):
+        empty_model = _FakeModel(segments=[], language="en")
+        rc, events = self._run(model=empty_model)
+        self.assertEqual(rc, 0)
+        self.assertFalse((self.dir / "Movie.en.srt").exists())
+        self.assertEqual(events[-1]["status"], "ok")
+        kinds = [e["event"] for e in events]
+        self.assertNotIn("context_set", kinds)
+
+    def test_unknown_step_id_returns_error(self):
+        stdin = io.StringIO()
+        stdin.write('{"event":"init"}\n')
+        stdin.write(json.dumps({
+            "step_id": "whisper.unknown",
+            "ctx": {"file": {"path": str(self.video)}},
+        }) + "\n")
+        stdin.seek(0)
+        stdout = io.StringIO()
+        rc = plugin.main(stdin=stdin, stdout=stdout)
+        events = _read_events(stdout)
+        self.assertEqual(rc, 0)
+        self.assertEqual(events[-1]["status"], "error")
+        self.assertIn("step_id", events[-1]["error"]["msg"])
+
+
 if __name__ == "__main__":
     unittest.main()
