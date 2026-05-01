@@ -138,6 +138,7 @@ def build_entry(manifest: dict, owner: str, repo: str, sha256: str) -> dict:
         "min_transcoderr_version": manifest["min_transcoderr_version"],
         "kind": manifest["kind"],
         "provides_steps": list(manifest["provides_steps"]),
+        "runtimes": list(manifest.get("runtimes", [])),
     }
 
 

@@ -52,6 +52,17 @@ Pure POSIX shell + `awk` + `wc`. Provides two step names:
    min_transcoderr_version = "0.19.0"
    ```
 
+   Optional: declare `runtimes` if your `bin/run` shells out to anything
+   beyond POSIX shell + coreutils. The transcoderr server checks each
+   listed executable is on `$PATH` before allowing install:
+
+   ```toml
+   runtimes = ["python3"]      # or ["node"], ["bash"], etc.
+   ```
+
+   Omit or leave empty if the plugin only needs `sh`/`awk`/`wc`-style
+   tools that every supported transcoderr image already ships.
+
 3. Run the **Publish plugin** workflow (Actions → Publish plugin → Run
    workflow), with the plugin directory name as the input. The workflow
    builds a deterministic tarball, updates `index.json`, and opens a PR

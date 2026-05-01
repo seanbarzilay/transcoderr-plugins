@@ -225,6 +225,7 @@ class BuildEntryTests(unittest.TestCase):
             "provides_steps": ["demo.before", "demo.after"],
             "summary": "demo summary",
             "min_transcoderr_version": "0.19.0",
+            "runtimes": ["python3", "node"],
         }
         entry = pub.build_entry(manifest, "foo", "bar", "deadbeef" * 8)
         self.assertEqual(entry, {
@@ -237,7 +238,17 @@ class BuildEntryTests(unittest.TestCase):
             "min_transcoderr_version": "0.19.0",
             "kind": "subprocess",
             "provides_steps": ["demo.before", "demo.after"],
+            "runtimes": ["python3", "node"],
         })
+
+    def test_runtimes_default_to_empty_list_when_missing(self):
+        manifest = {
+            "name": "x", "version": "1", "kind": "subprocess",
+            "entrypoint": "e", "provides_steps": ["s"],
+            "summary": "s", "min_transcoderr_version": "0",
+        }
+        entry = pub.build_entry(manifest, "o", "r", "sha")
+        self.assertEqual(entry["runtimes"], [])
 
     def test_provides_steps_is_a_new_list(self):
         steps = ["a"]
@@ -249,6 +260,18 @@ class BuildEntryTests(unittest.TestCase):
         entry = pub.build_entry(manifest, "o", "r", "sha")
         entry["provides_steps"].append("mutated")
         self.assertEqual(steps, ["a"])  # original is untouched
+
+    def test_runtimes_is_a_new_list(self):
+        runtimes = ["python3"]
+        manifest = {
+            "name": "x", "version": "1", "kind": "subprocess",
+            "entrypoint": "e", "provides_steps": ["s"],
+            "summary": "s", "min_transcoderr_version": "0",
+            "runtimes": runtimes,
+        }
+        entry = pub.build_entry(manifest, "o", "r", "sha")
+        entry["runtimes"].append("mutated")
+        self.assertEqual(runtimes, ["python3"])  # original is untouched
 
 
 class WriteIndexTests(unittest.TestCase):
