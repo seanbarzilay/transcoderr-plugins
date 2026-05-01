@@ -40,20 +40,31 @@ Pure POSIX shell + `awk` + `wc`. Provides two step names:
 
 1. Drop a directory under the repo root: `<plugin-name>/manifest.toml`
    plus `bin/run` (or whatever the manifest's `entrypoint` points at).
-2. Build a tarball: `tar -czf tarballs/<name>-<version>.tar.gz <plugin-name>`.
-3. Compute sha256: `shasum -a 256 tarballs/<name>-<version>.tar.gz`.
-4. Add an entry to `index.json` with the tarball URL, sha256, and the
-   step names the plugin provides.
-5. Open a PR.
+2. Fill in the manifest. Required fields:
 
-The minimum manifest:
+   ```toml
+   name = "your-plugin"
+   version = "0.1.0"
+   kind = "subprocess"
+   entrypoint = "bin/run"
+   provides_steps = ["your.step.name"]
+   summary = "One-line description shown in the catalog."
+   min_transcoderr_version = "0.19.0"
+   ```
 
-```toml
-name = "your-plugin"
-version = "0.1.0"
-kind = "subprocess"
-entrypoint = "bin/run"
-provides_steps = ["your.step.name"]
+3. Run the **Publish plugin** workflow (Actions → Publish plugin → Run
+   workflow), with the plugin directory name as the input. The workflow
+   builds a deterministic tarball, updates `index.json`, and opens a PR
+   for review.
+
+To re-publish an existing plugin, bump `version` in `manifest.toml` and
+run the workflow again. The script refuses to re-use an already-listed
+version.
+
+You can also run the script locally to validate before opening a PR:
+
+```bash
+python3 scripts/publish.py <plugin-name>
 ```
 
 ## Hosting your own catalog
