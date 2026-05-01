@@ -180,6 +180,16 @@ class BuildTarballTests(unittest.TestCase):
             run = tf.getmember("demo/bin/run")
             self.assertTrue(run.mode & 0o100, oct(run.mode))
 
+    def test_tarball_includes_plugin_root_dir_entry(self):
+        data = pub.build_tarball_bytes(self.plugin)
+        with _tarfile_mod.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+            root = tf.getmember("demo")
+        self.assertTrue(root.isdir())
+        self.assertEqual(root.mode, 0o755)
+        self.assertEqual(root.mtime, 0)
+        self.assertEqual(root.uid, 0)
+        self.assertEqual(root.gid, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
