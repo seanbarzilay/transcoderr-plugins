@@ -418,11 +418,12 @@ class MainTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_main_returns_zero_on_success(self):
-        with _chdir(self.repo):
+        with _chdir(self.repo), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(pub.main(["demo"]), 0)
 
     def test_main_returns_one_and_prints_error_on_failure(self):
-        with _chdir(self.repo):
+        with _chdir(self.repo), contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
             pub.main(["demo"])  # first publish
             # Second run with same version should fail.
             self.assertEqual(pub.main(["demo"]), 1)
