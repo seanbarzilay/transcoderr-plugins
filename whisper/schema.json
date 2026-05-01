@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "model": {
+      "type": "string",
+      "default": "large-v3-turbo",
+      "description": "faster-whisper model name (e.g. tiny, base, small, medium, large-v3, large-v3-turbo)"
+    },
+    "language": {
+      "type": "string",
+      "default": "auto",
+      "description": "ISO 639-1 language code, or 'auto' for autodetect"
+    },
+    "skip_if_exists": {
+      "type": "boolean",
+      "default": true,
+      "description": "Skip if a sidecar .srt already exists for this file"
+    },
+    "compute_type": {
+      "type": "string",
+      "default": "auto",
+      "description": "CTranslate2 compute type. 'auto' picks float16 on GPU, int8 on CPU."
+    }
+  }
+}
