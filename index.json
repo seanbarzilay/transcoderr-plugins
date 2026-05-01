@@ -16,7 +16,7 @@
         "size.report.before",
         "size.report.after"
       ],
-      "runtimes": []
+      "runtimes": ["python3"]
     }
   ]
 }
