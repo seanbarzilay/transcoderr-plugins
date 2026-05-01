@@ -63,6 +63,19 @@ Pure POSIX shell + `awk` + `wc`. Provides two step names:
    Omit or leave empty if the plugin only needs `sh`/`awk`/`wc`-style
    tools that every supported transcoderr image already ships.
 
+   Optional: declare `deps` to run a setup command at install time and
+   on every server boot — typically to fetch language-level dependencies
+   into the plugin's own directory:
+
+   ```toml
+   deps = "pip install --target ./libs -r requirements.txt"
+   ```
+
+   Runs via `/bin/sh -c` from the plugin's directory. A non-zero exit at
+   install fails the install (with rollback). Prefer install-into-plugin
+   patterns (`pip install --target ./libs`, `npm install` writing to
+   local `node_modules`) so dependencies don't leak outside the plugin.
+
 3. Run the **Publish plugin** workflow (Actions → Publish plugin → Run
    workflow), with the plugin directory name as the input. The workflow
    builds a deterministic tarball, updates `index.json`, and opens a PR
