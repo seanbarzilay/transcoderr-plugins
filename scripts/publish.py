@@ -209,7 +209,15 @@ def publish(plugin_name: str, repo_root: Path) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plugin", help="plugin directory name")
-    parser.parse_args(argv)
+    args = parser.parse_args(argv)
+
+    try:
+        summary = publish(args.plugin, get_repo_root())
+    except PublishError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(summary)
     return 0
 
 

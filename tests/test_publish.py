@@ -1,9 +1,11 @@
 """Unit + integration tests for scripts/publish.py."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -382,6 +384,35 @@ class PublishIntegrationTests(unittest.TestCase):
         with self.assertRaises(pub.PublishError) as ctx:
             pub.publish("nonexistent", self.repo)
         self.assertIn("not found", str(ctx.exception))
+
+
+@contextlib.contextmanager
+def _chdir(path: Path):
+    prev = os.getcwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(prev)
+
+
+class MainTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.repo = _make_repo(Path(self._tmp.name))
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_main_returns_zero_on_success(self):
+        with _chdir(self.repo):
+            self.assertEqual(pub.main(["demo"]), 0)
+
+    def test_main_returns_one_and_prints_error_on_failure(self):
+        with _chdir(self.repo):
+            pub.main(["demo"])  # first publish
+            # Second run with same version should fail.
+            self.assertEqual(pub.main(["demo"]), 1)
 
 
 if __name__ == "__main__":
