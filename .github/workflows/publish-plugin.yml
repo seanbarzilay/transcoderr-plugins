@@ -1,0 +1,42 @@
+name: Publish plugin
+
+on:
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: "Plugin directory name (e.g. size-report)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run publish script
+        env:
+          PLUGIN: ${{ inputs.plugin }}
+        run: python3 scripts/publish.py "$PLUGIN"
+
+      - name: Open PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: publish/${{ inputs.plugin }}
+          title: "publish: ${{ inputs.plugin }}"
+          body: |
+            Automated publish run for `${{ inputs.plugin }}`.
+
+            Triggered by @${{ github.actor }} via `workflow_dispatch`.
+          commit-message: "publish: ${{ inputs.plugin }}"
+          add-paths: |
+            index.json
+            tarballs/
