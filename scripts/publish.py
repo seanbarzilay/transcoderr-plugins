@@ -102,6 +102,12 @@ def build_tarball_bytes(plugin_dir: Path) -> bytes:
     buf = io.BytesIO()
     with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0, compresslevel=9) as gz:
         with tarfile.open(fileobj=gz, mode="w", format=tarfile.USTAR_FORMAT) as tf:
+            for path in plugin_dir.rglob("*"):
+                if path.is_symlink():
+                    raise PublishError(
+                        f"symlink not allowed in plugin tree: "
+                        f"{path.relative_to(plugin_dir.parent).as_posix()}"
+                    )
             paths = [plugin_dir] + sorted(plugin_dir.rglob("*"))
             for path in paths:
                 arcname = path.relative_to(plugin_dir.parent).as_posix()

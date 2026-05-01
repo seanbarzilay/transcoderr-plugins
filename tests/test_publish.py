@@ -190,6 +190,13 @@ class BuildTarballTests(unittest.TestCase):
         self.assertEqual(root.uid, 0)
         self.assertEqual(root.gid, 0)
 
+    def test_symlink_in_plugin_raises(self):
+        link = self.plugin / "bin" / "alias"
+        link.symlink_to("run")
+        with self.assertRaises(pub.PublishError) as ctx:
+            pub.build_tarball_bytes(self.plugin)
+        self.assertIn("symlink", str(ctx.exception).lower())
+
 
 if __name__ == "__main__":
     unittest.main()
