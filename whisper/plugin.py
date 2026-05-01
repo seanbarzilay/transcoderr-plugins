@@ -49,6 +49,16 @@ def format_srt(segments: Iterable) -> str:
     return "".join(parts)
 
 
+def write_srt_atomically(path: Path, srt_text: str) -> None:
+    """Write srt_text to path atomically (write to .tmp + os.replace).
+
+    The caller is responsible for ensuring the parent directory exists.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(srt_text)
+    os.replace(tmp, path)
+
+
 def main(stdin=None, stdout=None) -> int:
     """Entry point. Reads init+execute from stdin, emits events to stdout."""
     raise NotImplementedError("filled in by Task 9")

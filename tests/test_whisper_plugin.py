@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -72,6 +73,41 @@ class FormatSrtTests(unittest.TestCase):
         out = plugin.format_srt([_Segment(0.0, 1.0, "  spaced  ")])
         self.assertIn("spaced\n\n", out)
         self.assertNotIn("  spaced  \n", out)
+
+
+class WriteSrtAtomicallyTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_writes_exact_bytes(self):
+        target = self.dir / "Movie.en.srt"
+        plugin.write_srt_atomically(target, "1\n00:00:01,000 --> 00:00:02,000\nHi.\n\n")
+        self.assertEqual(
+            target.read_text(),
+            "1\n00:00:01,000 --> 00:00:02,000\nHi.\n\n",
+        )
+
+    def test_no_tmp_left_behind_on_success(self):
+        target = self.dir / "Movie.en.srt"
+        plugin.write_srt_atomically(target, "x")
+        self.assertFalse((self.dir / "Movie.en.srt.tmp").exists())
+
+    def test_overwrites_existing_target(self):
+        target = self.dir / "Movie.en.srt"
+        target.write_text("OLD")
+        plugin.write_srt_atomically(target, "NEW")
+        self.assertEqual(target.read_text(), "NEW")
+
+    def test_creates_parent_dir_if_missing(self):
+        target = self.dir / "nested" / "Movie.en.srt"
+        with self.assertRaises(FileNotFoundError):
+            # We do NOT auto-create parents — the caller (transcribe) is
+            # responsible. Confirm the contract.
+            plugin.write_srt_atomically(target, "x")
 
 
 if __name__ == "__main__":
