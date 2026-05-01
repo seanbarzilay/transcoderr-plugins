@@ -96,6 +96,7 @@ def build_tarball_bytes(plugin_dir: Path) -> bytes:
         if info.isdir():
             info.mode = 0o755
         elif info.isfile():
+            # Normalize to standard Unix modes; intentionally grants group+other read.
             info.mode = 0o755 if (info.mode & 0o100) else 0o644
         return info
 

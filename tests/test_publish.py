@@ -197,6 +197,12 @@ class BuildTarballTests(unittest.TestCase):
             pub.build_tarball_bytes(self.plugin)
         self.assertIn("symlink", str(ctx.exception).lower())
 
+    def test_non_executable_file_has_644_mode(self):
+        data = pub.build_tarball_bytes(self.plugin)
+        with _tarfile_mod.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+            manifest_member = tf.getmember("demo/manifest.toml")
+        self.assertEqual(manifest_member.mode, 0o644)
+
 
 if __name__ == "__main__":
     unittest.main()
