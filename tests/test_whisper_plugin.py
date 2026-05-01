@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 # Make the whisper plugin's plugin.py importable.
 PLUGIN_DIR = Path(__file__).resolve().parents[1] / "whisper"
@@ -221,6 +222,22 @@ class ParseExecuteTests(unittest.TestCase):
     def test_invalid_json_raises(self):
         with self.assertRaises(plugin.ProtocolError):
             plugin.parse_execute("{not json")
+
+
+class ResolveComputeTypeTests(unittest.TestCase):
+    def test_explicit_int8_passes_through(self):
+        self.assertEqual(plugin.resolve_compute_type("int8"), "int8")
+
+    def test_explicit_float16_passes_through(self):
+        self.assertEqual(plugin.resolve_compute_type("float16"), "float16")
+
+    def test_auto_with_gpu_returns_float16(self):
+        with mock.patch.object(plugin, "cuda_available", return_value=True):
+            self.assertEqual(plugin.resolve_compute_type("auto"), "float16")
+
+    def test_auto_without_gpu_returns_int8(self):
+        with mock.patch.object(plugin, "cuda_available", return_value=False):
+            self.assertEqual(plugin.resolve_compute_type("auto"), "int8")
 
 
 if __name__ == "__main__":

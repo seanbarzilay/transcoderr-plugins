@@ -110,6 +110,30 @@ def parse_execute(line: str) -> dict:
     }
 
 
+def cuda_available() -> bool:
+    """Return True if a CUDA device looks usable.
+
+    Indirected through this function so tests can monkeypatch it.
+    Production: probe ctranslate2's device list lazily — a missing import
+    or a no-CUDA-build returns False rather than raising.
+    """
+    try:
+        import ctranslate2  # type: ignore
+    except ImportError:
+        return False
+    try:
+        return ctranslate2.get_cuda_device_count() > 0
+    except Exception:
+        return False
+
+
+def resolve_compute_type(user_value: str) -> str:
+    """Resolve 'auto' to float16 (GPU) or int8 (CPU); pass others through."""
+    if user_value != "auto":
+        return user_value
+    return "float16" if cuda_available() else "int8"
+
+
 def main(stdin=None, stdout=None) -> int:
     """Entry point. Reads init+execute from stdin, emits events to stdout."""
     raise NotImplementedError("filled in by Task 9")
