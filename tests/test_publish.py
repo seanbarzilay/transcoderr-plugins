@@ -1,6 +1,7 @@
 """Unit + integration tests for scripts/publish.py."""
 from __future__ import annotations
 
+import io
 import sys
 import tempfile
 import unittest
@@ -132,6 +133,52 @@ class VersionConflictTests(unittest.TestCase):
             pub.check_version_conflict({"version": "0.1.0"}, "0.1.0", "demo")
         self.assertIn("already published", str(ctx.exception))
         self.assertIn("0.1.0", str(ctx.exception))
+
+
+import tarfile as _tarfile_mod
+
+
+class BuildTarballTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.plugin = self.tmp / "demo"
+        _write_manifest(self.plugin)
+        bin_dir = self.plugin / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "run").write_text("#!/bin/sh\necho hi\n")
+        (bin_dir / "run").chmod(0o755)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_two_builds_are_byte_identical(self):
+        a = pub.build_tarball_bytes(self.plugin)
+        b = pub.build_tarball_bytes(self.plugin)
+        self.assertEqual(a, b)
+
+    def test_tarball_contains_plugin_files(self):
+        data = pub.build_tarball_bytes(self.plugin)
+        with _tarfile_mod.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+            names = sorted(m.name for m in tf.getmembers())
+        self.assertIn("demo/manifest.toml", names)
+        self.assertIn("demo/bin/run", names)
+
+    def test_tarball_entries_have_zero_mtime_and_owner(self):
+        data = pub.build_tarball_bytes(self.plugin)
+        with _tarfile_mod.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+            for m in tf.getmembers():
+                self.assertEqual(m.mtime, 0, m.name)
+                self.assertEqual(m.uid, 0, m.name)
+                self.assertEqual(m.gid, 0, m.name)
+                self.assertEqual(m.uname, "", m.name)
+                self.assertEqual(m.gname, "", m.name)
+
+    def test_executable_bit_preserved_for_bin_run(self):
+        data = pub.build_tarball_bytes(self.plugin)
+        with _tarfile_mod.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+            run = tf.getmember("demo/bin/run")
+            self.assertTrue(run.mode & 0o100, oct(run.mode))
 
 
 if __name__ == "__main__":

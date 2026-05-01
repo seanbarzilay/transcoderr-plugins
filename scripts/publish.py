@@ -79,6 +79,35 @@ def check_version_conflict(
         )
 
 
+def build_tarball_bytes(plugin_dir: Path) -> bytes:
+    """Build a deterministic .tar.gz of plugin_dir, returned as raw bytes.
+
+    Determinism requires: zero mtime everywhere (per-entry and the gzip
+    header), zero uid/gid with empty uname/gname, normalized modes,
+    sorted iteration order, and USTAR format (no PAX extended headers).
+    """
+
+    def _filter(info: tarfile.TarInfo) -> tarfile.TarInfo:
+        info.mtime = 0
+        info.uid = 0
+        info.gid = 0
+        info.uname = ""
+        info.gname = ""
+        if info.isdir():
+            info.mode = 0o755
+        elif info.isfile():
+            info.mode = 0o755 if (info.mode & 0o100) else 0o644
+        return info
+
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0, compresslevel=9) as gz:
+        with tarfile.open(fileobj=gz, mode="w", format=tarfile.USTAR_FORMAT) as tf:
+            for path in sorted(plugin_dir.rglob("*")):
+                arcname = path.relative_to(plugin_dir.parent).as_posix()
+                tf.add(path, arcname=arcname, recursive=False, filter=_filter)
+    return buf.getvalue()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plugin", help="plugin directory name")
