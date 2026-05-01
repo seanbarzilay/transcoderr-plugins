@@ -17,6 +17,24 @@
         "size.report.after"
       ],
       "runtimes": []
+    },
+    {
+      "name": "whisper",
+      "version": "0.1.0",
+      "summary": "Generates a sidecar .srt for the output file using faster-whisper. GPU auto-detected.",
+      "tarball_url": "https://raw.githubusercontent.com/seanbarzilay/transcoderr-plugins/main/tarballs/whisper-0.1.0.tar.gz",
+      "tarball_sha256": "556da8ea56b798ad29f077c542e85cdf04d23d9a730e7566878b99685e1c3b87",
+      "homepage": "https://github.com/seanbarzilay/transcoderr-plugins/tree/main/whisper",
+      "min_transcoderr_version": "0.27.0",
+      "kind": "subprocess",
+      "provides_steps": [
+        "whisper.transcribe"
+      ],
+      "runtimes": [
+        "python3",
+        "ffprobe"
+      ],
+      "deps": "pip install --target ./libs faster-whisper nvidia-cublas-cu12 'nvidia-cudnn-cu12==9.*'"
     }
   ]
 }
