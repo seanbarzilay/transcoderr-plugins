@@ -23,6 +23,10 @@ DEFAULT_CONFIG = {
 }
 
 
+class ProtocolError(Exception):
+    """Raised when the JSON-RPC execute message is missing required fields."""
+
+
 def fmt_ts(secs: float) -> str:
     """Format seconds as SRT timestamp HH:MM:SS,mmm."""
     ms_total = int(round(secs * 1000))
@@ -75,6 +79,35 @@ def find_existing_sidecar(video_path: Path, language: str | None) -> Path | None
     pattern = str(video_path.with_suffix("")) + ".*.srt"
     matches = sorted(glob(pattern))
     return Path(matches[0]) if matches else None
+
+
+def parse_execute(line: str) -> dict:
+    """Parse a JSON-RPC execute line into step_id, file_path, and config.
+
+    Config defaults are filled in for any missing keys.
+    """
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError as exc:
+        raise ProtocolError(f"execute message is not valid JSON: {exc}") from exc
+
+    step_id = msg.get("step_id")
+    if not step_id:
+        raise ProtocolError("execute message missing step_id")
+
+    ctx = msg.get("ctx") or {}
+    file_path = (ctx.get("file") or {}).get("path")
+    if not file_path:
+        raise ProtocolError("execute message missing ctx.file.path")
+
+    user_config = msg.get("config") or {}
+    config = {**DEFAULT_CONFIG, **user_config}
+
+    return {
+        "step_id": step_id,
+        "file_path": file_path,
+        "config": config,
+    }
 
 
 def main(stdin=None, stdout=None) -> int:

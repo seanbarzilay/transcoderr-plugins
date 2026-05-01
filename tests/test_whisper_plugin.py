@@ -1,6 +1,7 @@
 """Tests for whisper/plugin.py."""
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -163,6 +164,63 @@ class FindExistingSidecarTests(unittest.TestCase):
             plugin.find_existing_sidecar(complex_video, "en"),
             sidecar,
         )
+
+
+class ParseExecuteTests(unittest.TestCase):
+    def test_full_message_with_explicit_config(self):
+        line = json.dumps({
+            "step_id": "whisper.transcribe",
+            "ctx": {"file": {"path": "/data/Movie.mkv"}},
+            "config": {
+                "model": "small",
+                "language": "en",
+                "skip_if_exists": False,
+                "compute_type": "int8",
+            },
+        })
+        result = plugin.parse_execute(line)
+        self.assertEqual(result["step_id"], "whisper.transcribe")
+        self.assertEqual(result["file_path"], "/data/Movie.mkv")
+        self.assertEqual(result["config"]["model"], "small")
+        self.assertEqual(result["config"]["language"], "en")
+        self.assertFalse(result["config"]["skip_if_exists"])
+        self.assertEqual(result["config"]["compute_type"], "int8")
+
+    def test_missing_config_fills_in_all_defaults(self):
+        line = json.dumps({
+            "step_id": "whisper.transcribe",
+            "ctx": {"file": {"path": "/data/Movie.mkv"}},
+        })
+        result = plugin.parse_execute(line)
+        self.assertEqual(result["config"], plugin.DEFAULT_CONFIG)
+
+    def test_partial_config_merges_with_defaults(self):
+        line = json.dumps({
+            "step_id": "whisper.transcribe",
+            "ctx": {"file": {"path": "/data/Movie.mkv"}},
+            "config": {"model": "tiny"},
+        })
+        result = plugin.parse_execute(line)
+        self.assertEqual(result["config"]["model"], "tiny")
+        self.assertEqual(result["config"]["language"], "auto")  # default
+        self.assertTrue(result["config"]["skip_if_exists"])
+        self.assertEqual(result["config"]["compute_type"], "auto")
+
+    def test_missing_step_id_raises(self):
+        line = json.dumps({"ctx": {"file": {"path": "/x"}}})
+        with self.assertRaises(plugin.ProtocolError) as ctx:
+            plugin.parse_execute(line)
+        self.assertIn("step_id", str(ctx.exception))
+
+    def test_missing_file_path_raises(self):
+        line = json.dumps({"step_id": "whisper.transcribe", "ctx": {}})
+        with self.assertRaises(plugin.ProtocolError) as ctx:
+            plugin.parse_execute(line)
+        self.assertIn("file", str(ctx.exception).lower())
+
+    def test_invalid_json_raises(self):
+        with self.assertRaises(plugin.ProtocolError):
+            plugin.parse_execute("{not json")
 
 
 if __name__ == "__main__":
