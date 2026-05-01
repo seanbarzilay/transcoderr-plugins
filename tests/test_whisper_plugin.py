@@ -434,6 +434,29 @@ class MainTests(unittest.TestCase):
         self.assertEqual(events[-1]["status"], "error")
         self.assertIn("step_id", events[-1]["error"]["msg"])
 
+    def test_oom_loading_model_returns_friendly_error(self):
+        def _raise_oom(*args, **kwargs):
+            raise MemoryError("not enough RAM")
+        stdin = io.StringIO()
+        stdin.write('{"event":"init"}\n')
+        stdin.write(json.dumps({
+            "step_id": "whisper.transcribe",
+            "ctx": {"file": {"path": str(self.video)}},
+            "config": {"model": "large-v3"},
+        }) + "\n")
+        stdin.seek(0)
+        stdout = io.StringIO()
+        with mock.patch.object(plugin, "load_model", side_effect=_raise_oom), \
+             mock.patch.object(plugin, "has_audio_stream", return_value=True):
+            plugin.main(stdin=stdin, stdout=stdout)
+        events = _read_events(stdout)
+        self.assertEqual(events[-1]["status"], "error")
+        msg = events[-1]["error"]["msg"]
+        self.assertIn("OOM", msg)
+        self.assertIn("large-v3", msg)
+        self.assertIn("smaller model", msg)
+        self.assertIn("compute_type=int8", msg)
+
 
 if __name__ == "__main__":
     unittest.main()

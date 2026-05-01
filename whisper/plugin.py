@@ -207,7 +207,13 @@ def transcribe(file_path: Path, config: dict, *, stdout) -> dict | None:
             return None
 
     compute_type = resolve_compute_type(config["compute_type"])
-    model = load_model(config["model"], device="auto", compute_type=compute_type)
+    try:
+        model = load_model(config["model"], device="auto", compute_type=compute_type)
+    except MemoryError as exc:
+        raise ProtocolError(
+            f"OOM loading model {config['model']}; "
+            f"try a smaller model or compute_type=int8"
+        ) from exc
 
     started = time.monotonic()
     segments_iter, info = model.transcribe(
