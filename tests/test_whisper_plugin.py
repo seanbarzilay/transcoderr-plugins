@@ -1,10 +1,12 @@
 """Tests for whisper/plugin.py."""
 from __future__ import annotations
 
+import io
 import json
 import sys
 import tempfile
 import unittest
+from collections import namedtuple
 from pathlib import Path
 from unittest import mock
 
@@ -43,8 +45,6 @@ class FmtTsTests(unittest.TestCase):
         self.assertEqual(plugin.fmt_ts(0.0014), "00:00:00,001")
         self.assertEqual(plugin.fmt_ts(0.0016), "00:00:00,002")
 
-
-from collections import namedtuple
 
 _Segment = namedtuple("_Segment", ["start", "end", "text"])
 
@@ -240,9 +240,6 @@ class ResolveComputeTypeTests(unittest.TestCase):
             self.assertEqual(plugin.resolve_compute_type("auto"), "int8")
 
 
-import io
-
-
 class StdoutWriterTests(unittest.TestCase):
     def test_emit_log(self):
         buf = io.StringIO()
@@ -321,6 +318,7 @@ class _FakeModel:
         self._language = language
 
     def transcribe(self, file_path, language=None, vad_filter=True):
+        assert vad_filter is True, "vad_filter must be True"
         return iter(self._segments), _FakeInfo(self._language)
 
 

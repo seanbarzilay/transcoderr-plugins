@@ -13,7 +13,7 @@ import sys
 import time
 from glob import glob
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Iterable
 
 DEFAULT_CONFIG = {
     "model": "large-v3-turbo",
