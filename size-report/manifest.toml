@@ -3,3 +3,5 @@ version = "0.1.0"
 kind = "subprocess"
 entrypoint = "bin/run"
 provides_steps = ["size.report.before", "size.report.after"]
+summary = "Records before/after byte counts and the compression ratio so notify templates can render saved-percentage stats."
+min_transcoderr_version = "0.19.0"
