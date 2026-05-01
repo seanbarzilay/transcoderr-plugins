@@ -1,6 +1,7 @@
 """Unit + integration tests for scripts/publish.py."""
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import sys
@@ -291,6 +292,96 @@ class WriteIndexTests(unittest.TestCase):
         text = self.path.read_text()
         self.assertTrue(text.endswith("\n"))
         self.assertIn('\n  "schema_version"', text)  # 2-space indent
+
+
+import subprocess as _subprocess
+
+
+def _make_repo(tmp: Path, plugin_name: str = "demo", manifest_overrides: dict | None = None) -> Path:
+    """Init a git repo with origin set, an index.json, and a plugin dir.
+
+    Returns the repo root.
+    """
+    _subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp, check=True)
+    _subprocess.run(
+        ["git", "remote", "add", "origin", "https://github.com/example/cat.git"],
+        cwd=tmp, check=True,
+    )
+    (tmp / "index.json").write_text(json.dumps({
+        "schema_version": 1,
+        "catalog_name": "test",
+        "catalog_url": "https://github.com/example/cat",
+        "plugins": [],
+    }, indent=2) + "\n")
+    plugin = tmp / plugin_name
+    _write_manifest(plugin, name=plugin_name, **(manifest_overrides or {}))
+    bin_dir = plugin / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "run").write_text("#!/bin/sh\necho hi\n")
+    (bin_dir / "run").chmod(0o755)
+    return tmp
+
+
+class PublishIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.repo = _make_repo(Path(self._tmp.name))
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_first_publish_creates_tarball_and_appends_entry(self):
+        summary = pub.publish("demo", self.repo)
+
+        tarball = self.repo / "tarballs" / "demo-0.1.0.tar.gz"
+        self.assertTrue(tarball.exists())
+
+        index = json.loads((self.repo / "index.json").read_text())
+        self.assertEqual(len(index["plugins"]), 1)
+        entry = index["plugins"][0]
+        self.assertEqual(entry["name"], "demo")
+        self.assertEqual(entry["version"], "0.1.0")
+        self.assertEqual(entry["homepage"], "https://github.com/example/cat/tree/main/demo")
+        self.assertEqual(
+            entry["tarball_url"],
+            "https://raw.githubusercontent.com/example/cat/main/tarballs/demo-0.1.0.tar.gz",
+        )
+
+        # sha in index matches sha of the file on disk
+        actual_sha = hashlib.sha256(tarball.read_bytes()).hexdigest()
+        self.assertEqual(entry["tarball_sha256"], actual_sha)
+
+        self.assertIn("demo: (new) -> 0.1.0", summary)
+
+    def test_update_replaces_entry_and_deletes_old_tarball(self):
+        # First publish at 0.1.0
+        pub.publish("demo", self.repo)
+        old_tarball = self.repo / "tarballs" / "demo-0.1.0.tar.gz"
+        self.assertTrue(old_tarball.exists())
+
+        # Bump manifest to 0.2.0 and publish again
+        _write_manifest(self.repo / "demo", name="demo", version="0.2.0")
+        summary = pub.publish("demo", self.repo)
+
+        new_tarball = self.repo / "tarballs" / "demo-0.2.0.tar.gz"
+        self.assertTrue(new_tarball.exists())
+        self.assertFalse(old_tarball.exists())
+
+        index = json.loads((self.repo / "index.json").read_text())
+        self.assertEqual(len(index["plugins"]), 1)
+        self.assertEqual(index["plugins"][0]["version"], "0.2.0")
+        self.assertIn("demo: 0.1.0 -> 0.2.0", summary)
+
+    def test_version_conflict_raises_after_first_publish(self):
+        pub.publish("demo", self.repo)
+        with self.assertRaises(pub.PublishError) as ctx:
+            pub.publish("demo", self.repo)
+        self.assertIn("already published", str(ctx.exception))
+
+    def test_missing_plugin_dir_raises(self):
+        with self.assertRaises(pub.PublishError) as ctx:
+            pub.publish("nonexistent", self.repo)
+        self.assertIn("not found", str(ctx.exception))
 
 
 if __name__ == "__main__":

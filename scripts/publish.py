@@ -145,6 +145,67 @@ def write_index(index: dict, new_entry: dict, index_path: Path) -> None:
     index_path.write_text(json.dumps(index, indent=2) + "\n")
 
 
+def get_origin_url(repo_root: Path) -> str:
+    """Return the URL of the 'origin' remote of repo_root."""
+    return subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def get_repo_root() -> Path:
+    """Return the repo root via `git rev-parse --show-toplevel` for $PWD."""
+    return Path(
+        subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+
+
+def publish(plugin_name: str, repo_root: Path) -> str:
+    """Publish plugin_name from repo_root. Returns a one-line summary."""
+    plugin_dir = repo_root / plugin_name
+    if not plugin_dir.is_dir():
+        raise PublishError(f"plugin directory '{plugin_name}/' not found")
+
+    manifest = load_manifest(plugin_dir, plugin_name)
+    new_version = manifest["version"]
+
+    index_path = repo_root / "index.json"
+    index = json.loads(index_path.read_text())
+    existing = find_entry(index, plugin_name)
+    check_version_conflict(existing, new_version, plugin_name)
+
+    owner, repo = parse_owner_repo(get_origin_url(repo_root))
+
+    tarball_bytes = build_tarball_bytes(plugin_dir)
+    sha256 = hashlib.sha256(tarball_bytes).hexdigest()
+
+    tarballs_dir = repo_root / "tarballs"
+    tarballs_dir.mkdir(exist_ok=True)
+    new_tarball = tarballs_dir / f"{plugin_name}-{new_version}.tar.gz"
+    new_tarball.write_bytes(tarball_bytes)
+
+    if existing is not None:
+        old_version = existing["version"]
+        old_tarball = tarballs_dir / f"{plugin_name}-{old_version}.tar.gz"
+        if old_tarball.exists():
+            old_tarball.unlink()
+    else:
+        old_version = "(new)"
+
+    entry = build_entry(manifest, owner, repo, sha256)
+    write_index(index, entry, index_path)
+
+    return f"{plugin_name}: {old_version} -> {new_version} ({sha256})"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plugin", help="plugin directory name")
