@@ -134,6 +134,26 @@ def resolve_compute_type(user_value: str) -> str:
     return "float16" if cuda_available() else "int8"
 
 
+def emit_log(msg: str, out=None) -> None:
+    out = out if out is not None else sys.stdout
+    out.write(json.dumps({"event": "log", "msg": msg}, separators=(",", ":")) + "\n")
+
+
+def emit_context_set(key: str, value: dict, out=None) -> None:
+    out = out if out is not None else sys.stdout
+    out.write(json.dumps({"event": "context_set", "key": key, "value": value}, separators=(",", ":")) + "\n")
+
+
+def emit_result_ok(out=None) -> None:
+    out = out if out is not None else sys.stdout
+    out.write(json.dumps({"event": "result", "status": "ok", "outputs": {}}, separators=(",", ":")) + "\n")
+
+
+def emit_result_err(msg: str, out=None) -> None:
+    out = out if out is not None else sys.stdout
+    out.write(json.dumps({"event": "result", "status": "error", "error": {"msg": msg}}, separators=(",", ":")) + "\n")
+
+
 def main(stdin=None, stdout=None) -> int:
     """Entry point. Reads init+execute from stdin, emits events to stdout."""
     raise NotImplementedError("filled in by Task 9")

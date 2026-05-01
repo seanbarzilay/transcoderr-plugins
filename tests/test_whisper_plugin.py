@@ -240,5 +240,47 @@ class ResolveComputeTypeTests(unittest.TestCase):
             self.assertEqual(plugin.resolve_compute_type("auto"), "int8")
 
 
+import io
+
+
+class StdoutWriterTests(unittest.TestCase):
+    def test_emit_log(self):
+        buf = io.StringIO()
+        plugin.emit_log("hello", out=buf)
+        self.assertEqual(buf.getvalue(), '{"event":"log","msg":"hello"}\n')
+
+    def test_emit_log_escapes_quotes(self):
+        buf = io.StringIO()
+        plugin.emit_log('say "hi"', out=buf)
+        msg = json.loads(buf.getvalue().rstrip("\n"))
+        self.assertEqual(msg, {"event": "log", "msg": 'say "hi"'})
+
+    def test_emit_context_set(self):
+        buf = io.StringIO()
+        plugin.emit_context_set("whisper", {"language": "en"}, out=buf)
+        msg = json.loads(buf.getvalue().rstrip("\n"))
+        self.assertEqual(msg, {
+            "event": "context_set",
+            "key": "whisper",
+            "value": {"language": "en"},
+        })
+
+    def test_emit_result_ok(self):
+        buf = io.StringIO()
+        plugin.emit_result_ok(out=buf)
+        msg = json.loads(buf.getvalue().rstrip("\n"))
+        self.assertEqual(msg, {"event": "result", "status": "ok", "outputs": {}})
+
+    def test_emit_result_err(self):
+        buf = io.StringIO()
+        plugin.emit_result_err("oops", out=buf)
+        msg = json.loads(buf.getvalue().rstrip("\n"))
+        self.assertEqual(msg, {
+            "event": "result",
+            "status": "error",
+            "error": {"msg": "oops"},
+        })
+
+
 if __name__ == "__main__":
     unittest.main()
