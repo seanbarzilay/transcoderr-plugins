@@ -33,6 +33,7 @@ jobs:
       - name: Open PR
         uses: peter-evans/create-pull-request@v6
         with:
+          base: main
           branch: publish/${{ inputs.plugin }}
           title: "publish: ${{ inputs.plugin }}"
           body: |
