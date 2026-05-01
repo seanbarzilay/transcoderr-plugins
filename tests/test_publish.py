@@ -226,6 +226,7 @@ class BuildEntryTests(unittest.TestCase):
             "summary": "demo summary",
             "min_transcoderr_version": "0.19.0",
             "runtimes": ["python3", "node"],
+            "deps": "pip install -r requirements.txt",
         }
         entry = pub.build_entry(manifest, "foo", "bar", "deadbeef" * 8)
         self.assertEqual(entry, {
@@ -239,6 +240,7 @@ class BuildEntryTests(unittest.TestCase):
             "kind": "subprocess",
             "provides_steps": ["demo.before", "demo.after"],
             "runtimes": ["python3", "node"],
+            "deps": "pip install -r requirements.txt",
         })
 
     def test_runtimes_default_to_empty_list_when_missing(self):
@@ -249,6 +251,15 @@ class BuildEntryTests(unittest.TestCase):
         }
         entry = pub.build_entry(manifest, "o", "r", "sha")
         self.assertEqual(entry["runtimes"], [])
+
+    def test_deps_defaults_to_none_when_missing(self):
+        manifest = {
+            "name": "x", "version": "1", "kind": "subprocess",
+            "entrypoint": "e", "provides_steps": ["s"],
+            "summary": "s", "min_transcoderr_version": "0",
+        }
+        entry = pub.build_entry(manifest, "o", "r", "sha")
+        self.assertIsNone(entry["deps"])
 
     def test_provides_steps_is_a_new_list(self):
         steps = ["a"]
