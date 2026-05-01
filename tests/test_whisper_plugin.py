@@ -111,6 +111,16 @@ class WriteSrtAtomicallyTests(unittest.TestCase):
             # responsible. Confirm the contract.
             plugin.write_srt_atomically(target, "x")
 
+    def test_writes_utf8_with_non_ascii_text(self):
+        # SRT is defined as UTF-8. Path.write_text without an explicit
+        # encoding falls back to the platform locale, which is ASCII on
+        # minimal containers — that crashes the moment Whisper hands us a
+        # transcript with non-ASCII characters.
+        target = self.dir / "Movie.ja.srt"
+        plugin.write_srt_atomically(target, "1\n00:00:00,000 --> 00:00:01,000\nこんにちは\n\n")
+        self.assertEqual(target.read_bytes().decode("utf-8"),
+                         "1\n00:00:00,000 --> 00:00:01,000\nこんにちは\n\n")
+
 
 class FindExistingSidecarTests(unittest.TestCase):
     def setUp(self):

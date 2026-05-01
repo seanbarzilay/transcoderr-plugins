@@ -59,7 +59,7 @@ def write_srt_atomically(path: Path, srt_text: str) -> None:
     The caller is responsible for ensuring the parent directory exists.
     """
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(srt_text)
+    tmp.write_text(srt_text, encoding="utf-8")
     os.replace(tmp, path)
 
 
