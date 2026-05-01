@@ -214,6 +214,24 @@ class BuildTarballTests(unittest.TestCase):
             manifest_member = tf.getmember("demo/manifest.toml")
         self.assertEqual(manifest_member.mode, 0o644)
 
+    def test_excludes_pycache_directories(self):
+        # Python plugins create __pycache__ when imported by tests; the
+        # bytecode is machine- and version-specific, so it must never
+        # ship in the tarball.
+        cache = self.plugin / "__pycache__"
+        cache.mkdir()
+        (cache / "plugin.cpython-314.pyc").write_bytes(b"\x00")
+        nested_cache = self.plugin / "bin" / "__pycache__"
+        nested_cache.mkdir()
+        (nested_cache / "x.cpython-314.pyc").write_bytes(b"\x00")
+
+        data = pub.build_tarball_bytes(self.plugin)
+        with _tarfile_mod.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+            names = sorted(m.name for m in tf.getmembers())
+        for name in names:
+            self.assertNotIn("__pycache__", name, f"unexpected entry: {name}")
+            self.assertFalse(name.endswith(".pyc"), f"unexpected entry: {name}")
+
 
 class BuildEntryTests(unittest.TestCase):
     def test_field_mapping(self):
