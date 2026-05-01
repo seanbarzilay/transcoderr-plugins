@@ -154,6 +154,31 @@ def emit_result_err(msg: str, out=None) -> None:
     out.write(json.dumps({"event": "result", "status": "error", "error": {"msg": msg}}, separators=(",", ":")) + "\n")
 
 
+def has_audio_stream(file_path: Path) -> bool:
+    """Return True if ffprobe sees at least one audio stream in file_path."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "a:0",
+                "-show_entries", "stream=index",
+                "-of", "json",
+                str(file_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise ProtocolError("ffprobe not on PATH") from exc
+
+    try:
+        data = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return False
+    return bool(data.get("streams"))
+
+
 def main(stdin=None, stdout=None) -> int:
     """Entry point. Reads init+execute from stdin, emits events to stdout."""
     raise NotImplementedError("filled in by Task 9")

@@ -282,5 +282,33 @@ class StdoutWriterTests(unittest.TestCase):
         })
 
 
+class HasAudioStreamTests(unittest.TestCase):
+    def _make_completed(self, stdout: str, returncode: int = 0):
+        cp = mock.MagicMock()
+        cp.stdout = stdout
+        cp.returncode = returncode
+        return cp
+
+    def test_true_when_ffprobe_finds_audio_stream(self):
+        ffprobe_out = json.dumps({"streams": [{"index": 1}]})
+        with mock.patch.object(plugin.subprocess, "run", return_value=self._make_completed(ffprobe_out)):
+            self.assertTrue(plugin.has_audio_stream(Path("/x")))
+
+    def test_false_when_ffprobe_finds_no_audio(self):
+        ffprobe_out = json.dumps({"streams": []})
+        with mock.patch.object(plugin.subprocess, "run", return_value=self._make_completed(ffprobe_out)):
+            self.assertFalse(plugin.has_audio_stream(Path("/x")))
+
+    def test_false_when_ffprobe_returns_no_streams_key(self):
+        with mock.patch.object(plugin.subprocess, "run", return_value=self._make_completed("{}")):
+            self.assertFalse(plugin.has_audio_stream(Path("/x")))
+
+    def test_raises_when_ffprobe_not_found(self):
+        with mock.patch.object(plugin.subprocess, "run", side_effect=FileNotFoundError("ffprobe")):
+            with self.assertRaises(plugin.ProtocolError) as ctx:
+                plugin.has_audio_stream(Path("/x"))
+            self.assertIn("ffprobe", str(ctx.exception).lower())
+
+
 if __name__ == "__main__":
     unittest.main()
