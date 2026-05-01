@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -238,6 +239,58 @@ class BuildEntryTests(unittest.TestCase):
         entry = pub.build_entry(manifest, "o", "r", "sha")
         entry["provides_steps"].append("mutated")
         self.assertEqual(steps, ["a"])  # original is untouched
+
+
+class WriteIndexTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.path = self.tmp / "index.json"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_appends_new_entry(self):
+        index = {"schema_version": 1, "catalog_name": "t",
+                 "catalog_url": "u", "plugins": []}
+        new = {"name": "demo", "version": "0.1.0"}
+        pub.write_index(index, new, self.path)
+        loaded = json.loads(self.path.read_text())
+        self.assertEqual(loaded["plugins"], [new])
+
+    def test_replaces_existing_entry_by_name(self):
+        old = {"name": "demo", "version": "0.1.0"}
+        new = {"name": "demo", "version": "0.2.0"}
+        index = {"schema_version": 1, "catalog_name": "t",
+                 "catalog_url": "u", "plugins": [old]}
+        pub.write_index(index, new, self.path)
+        loaded = json.loads(self.path.read_text())
+        self.assertEqual(loaded["plugins"], [new])
+
+    def test_plugins_sorted_by_name(self):
+        index = {"schema_version": 1, "catalog_name": "t",
+                 "catalog_url": "u",
+                 "plugins": [{"name": "z"}, {"name": "a"}]}
+        pub.write_index(index, {"name": "m"}, self.path)
+        loaded = json.loads(self.path.read_text())
+        self.assertEqual([p["name"] for p in loaded["plugins"]], ["a", "m", "z"])
+
+    def test_top_level_keys_preserved(self):
+        index = {"schema_version": 1, "catalog_name": "official",
+                 "catalog_url": "https://example", "plugins": []}
+        pub.write_index(index, {"name": "x"}, self.path)
+        loaded = json.loads(self.path.read_text())
+        self.assertEqual(loaded["schema_version"], 1)
+        self.assertEqual(loaded["catalog_name"], "official")
+        self.assertEqual(loaded["catalog_url"], "https://example")
+
+    def test_indented_with_trailing_newline(self):
+        index = {"schema_version": 1, "catalog_name": "t",
+                 "catalog_url": "u", "plugins": []}
+        pub.write_index(index, {"name": "x"}, self.path)
+        text = self.path.read_text()
+        self.assertTrue(text.endswith("\n"))
+        self.assertIn('\n  "schema_version"', text)  # 2-space indent
 
 
 if __name__ == "__main__":

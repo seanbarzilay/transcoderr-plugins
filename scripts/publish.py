@@ -136,6 +136,15 @@ def build_entry(manifest: dict, owner: str, repo: str, sha256: str) -> dict:
     }
 
 
+def write_index(index: dict, new_entry: dict, index_path: Path) -> None:
+    """Replace or append new_entry in index, sort plugins by name, write to disk."""
+    plugins = [p for p in index.get("plugins", []) if p.get("name") != new_entry["name"]]
+    plugins.append(new_entry)
+    plugins.sort(key=lambda p: p["name"])
+    index["plugins"] = plugins
+    index_path.write_text(json.dumps(index, indent=2) + "\n")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plugin", help="plugin directory name")
