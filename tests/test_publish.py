@@ -107,5 +107,32 @@ class LoadManifestTests(unittest.TestCase):
         self.assertIn("manifest.toml", str(ctx.exception))
 
 
+class IndexLookupTests(unittest.TestCase):
+    def test_find_entry_returns_match(self):
+        index = {"plugins": [{"name": "a", "version": "1"}, {"name": "b", "version": "2"}]}
+        self.assertEqual(pub.find_entry(index, "b"), {"name": "b", "version": "2"})
+
+    def test_find_entry_returns_none_when_missing(self):
+        index = {"plugins": [{"name": "a", "version": "1"}]}
+        self.assertIsNone(pub.find_entry(index, "z"))
+
+    def test_find_entry_handles_no_plugins_key(self):
+        self.assertIsNone(pub.find_entry({}, "z"))
+
+
+class VersionConflictTests(unittest.TestCase):
+    def test_no_existing_entry_passes(self):
+        pub.check_version_conflict(None, "0.1.0", "demo")  # no raise
+
+    def test_different_version_passes(self):
+        pub.check_version_conflict({"version": "0.1.0"}, "0.1.1", "demo")  # no raise
+
+    def test_same_version_raises(self):
+        with self.assertRaises(pub.PublishError) as ctx:
+            pub.check_version_conflict({"version": "0.1.0"}, "0.1.0", "demo")
+        self.assertIn("already published", str(ctx.exception))
+        self.assertIn("0.1.0", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

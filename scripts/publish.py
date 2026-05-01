@@ -60,6 +60,25 @@ def load_manifest(plugin_dir: Path, expected_name: str) -> dict:
     return manifest
 
 
+def find_entry(index: dict, name: str) -> dict | None:
+    """Return the plugin entry with this name from index, or None."""
+    for entry in index.get("plugins", []):
+        if entry.get("name") == name:
+            return entry
+    return None
+
+
+def check_version_conflict(
+    existing: dict | None, new_version: str, name: str
+) -> None:
+    """Fail if existing entry already publishes this exact version."""
+    if existing is not None and existing.get("version") == new_version:
+        raise PublishError(
+            f"{name} {new_version} is already published. "
+            f"Bump version in manifest.toml first."
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plugin", help="plugin directory name")
