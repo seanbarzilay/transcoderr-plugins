@@ -16,7 +16,6 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Iterable
 
 DEFAULT_CONFIG = {
     "model": "realesr-animevideov3",
