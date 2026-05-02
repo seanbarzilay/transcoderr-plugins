@@ -409,5 +409,70 @@ class RunDownscaleSubprocessTests(unittest.TestCase):
             self.assertIn("path", str(ctx.exception).lower())
 
 
+class RunMuxSubprocessTests(unittest.TestCase):
+    def _make_completed(self, returncode: int = 0, stderr: str = ""):
+        cp = mock.MagicMock()
+        cp.returncode = returncode
+        cp.stderr = stderr
+        return cp
+
+    def test_argv_maps_video_from_first_input_audio_subs_from_second(self):
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured["argv"] = argv
+            return self._make_completed()
+
+        with mock.patch.object(plugin.subprocess, "run", side_effect=fake_run):
+            plugin.run_mux_subprocess(
+                Path("/video_only.mkv"),
+                Path("/original.mkv"),
+                Path("/out.mkv"),
+            )
+        argv = captured["argv"]
+        self.assertEqual(argv[0], "ffmpeg")
+        # Two -i inputs, in order: video_only then original
+        i_indices = [i for i, x in enumerate(argv) if x == "-i"]
+        self.assertEqual(len(i_indices), 2)
+        self.assertEqual(argv[i_indices[0] + 1], "/video_only.mkv")
+        self.assertEqual(argv[i_indices[1] + 1], "/original.mkv")
+        # Maps: 0:v:0, 1:a?, 1:s?
+        self.assertIn("-map", argv)
+        map_values = [argv[i + 1] for i, x in enumerate(argv) if x == "-map"]
+        self.assertIn("0:v:0", map_values)
+        self.assertIn("1:a?", map_values)
+        self.assertIn("1:s?", map_values)
+        # -c copy
+        c_indices = [i for i, x in enumerate(argv) if x == "-c"]
+        self.assertTrue(any(argv[i + 1] == "copy" for i in c_indices))
+        # Output last
+        self.assertEqual(argv[-1], "/out.mkv")
+
+    def test_overwrites_existing_output(self):
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured["argv"] = argv
+            return self._make_completed()
+
+        with mock.patch.object(plugin.subprocess, "run", side_effect=fake_run):
+            plugin.run_mux_subprocess(
+                Path("/v.mkv"), Path("/o.mkv"), Path("/out.mkv"),
+            )
+        self.assertIn("-y", captured["argv"])
+
+    def test_nonzero_exit_raises(self):
+        with mock.patch.object(
+            plugin.subprocess, "run",
+            return_value=self._make_completed(returncode=1, stderr="mux failed"),
+        ):
+            with self.assertRaises(plugin.ProtocolError) as ctx:
+                plugin.run_mux_subprocess(
+                    Path("/v.mkv"), Path("/o.mkv"), Path("/out.mkv"),
+                )
+            self.assertIn("mux", str(ctx.exception).lower())
+            self.assertIn("mux failed", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

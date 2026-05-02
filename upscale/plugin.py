@@ -246,6 +246,37 @@ def run_downscale_subprocess(
         )
 
 
+def run_mux_subprocess(
+    video_only_path: Path,
+    original_input: Path,
+    output_path: Path,
+) -> None:
+    """Mux upscaled video stream from video_only_path with audio + subs from original_input.
+
+    Streams are stream-copied (no re-encoding). Audio and subtitle maps
+    use `?` suffix so missing streams don't cause ffmpeg to abort.
+    """
+    argv = [
+        "ffmpeg", "-y",
+        "-i", str(video_only_path),
+        "-i", str(original_input),
+        "-map", "0:v:0",
+        "-map", "1:a?",
+        "-map", "1:s?",
+        "-c", "copy",
+        str(output_path),
+    ]
+    try:
+        result = subprocess.run(argv, check=False, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise ProtocolError("ffmpeg not on PATH") from exc
+
+    if result.returncode != 0:
+        raise ProtocolError(
+            f"mux ffmpeg failed: {(result.stderr or '').strip()}"
+        )
+
+
 def main(stdin=None, stdout=None) -> int:
     """Entry point. Reads init+execute from stdin, emits events to stdout."""
     raise NotImplementedError("filled in by Task 9")
