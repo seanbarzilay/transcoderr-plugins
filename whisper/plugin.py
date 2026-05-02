@@ -84,23 +84,36 @@ def find_existing_sidecar(video_path: Path, language: str | None) -> Path | None
 def parse_execute(line: str) -> dict:
     """Parse a JSON-RPC execute line into step_id, file_path, and config.
 
-    Config defaults are filled in for any missing keys.
+    The host (transcoderr/src/plugins/subprocess.rs) sends:
+        {"method": "execute",
+         "params": {"step_id": "...", "with": {...}, "context": {...}}}
+    so the relevant fields live under `params`. We tolerate either the
+    nested form (production) or the flat form (older fixtures) so a
+    plugin author can hand-craft a test message either way. Config
+    defaults are filled in for any missing keys.
     """
     try:
         msg = json.loads(line)
     except json.JSONDecodeError as exc:
         raise ProtocolError(f"execute message is not valid JSON: {exc}") from exc
 
-    step_id = msg.get("step_id")
+    # Unwrap `params` when present (the actual host contract); fall back
+    # to the top level so old test fixtures still parse.
+    body = msg.get("params") if isinstance(msg.get("params"), dict) else msg
+
+    step_id = body.get("step_id")
     if not step_id:
         raise ProtocolError("execute message missing step_id")
 
-    ctx = msg.get("ctx") or {}
-    file_path = (ctx.get("file") or {}).get("path")
+    # The host sends the run context as `context`; tolerate the older
+    # `ctx` field name too.
+    context = body.get("context") or body.get("ctx") or {}
+    file_path = (context.get("file") or {}).get("path")
     if not file_path:
-        raise ProtocolError("execute message missing ctx.file.path")
+        raise ProtocolError("execute message missing context.file.path")
 
-    user_config = msg.get("config") or {}
+    # The host sends per-step config as `with`; tolerate `config` too.
+    user_config = body.get("with") or body.get("config") or {}
     config = {**DEFAULT_CONFIG, **user_config}
 
     return {

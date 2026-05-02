@@ -178,7 +178,65 @@ class FindExistingSidecarTests(unittest.TestCase):
 
 
 class ParseExecuteTests(unittest.TestCase):
-    def test_full_message_with_explicit_config(self):
+    """The host (transcoderr/src/plugins/subprocess.rs) sends the execute
+    message as `{"method":"execute","params":{step_id, with, context}}`.
+    `parse_execute` must accept that nested shape; for resilience, it
+    also accepts a flat shape with the older `ctx` / `config` field
+    names that early test fixtures used.
+    """
+
+    def test_host_protocol_full_message(self):
+        # The exact shape transcoderr sends in production.
+        line = json.dumps({
+            "method": "execute",
+            "params": {
+                "step_id": "whisper.transcribe",
+                "with": {
+                    "model": "small",
+                    "language": "en",
+                    "skip_if_exists": False,
+                    "compute_type": "int8",
+                },
+                "context": {"file": {"path": "/data/Movie.mkv"}},
+            },
+        })
+        result = plugin.parse_execute(line)
+        self.assertEqual(result["step_id"], "whisper.transcribe")
+        self.assertEqual(result["file_path"], "/data/Movie.mkv")
+        self.assertEqual(result["config"]["model"], "small")
+        self.assertEqual(result["config"]["language"], "en")
+        self.assertFalse(result["config"]["skip_if_exists"])
+        self.assertEqual(result["config"]["compute_type"], "int8")
+
+    def test_host_protocol_missing_with_fills_defaults(self):
+        line = json.dumps({
+            "method": "execute",
+            "params": {
+                "step_id": "whisper.transcribe",
+                "context": {"file": {"path": "/data/Movie.mkv"}},
+            },
+        })
+        result = plugin.parse_execute(line)
+        self.assertEqual(result["config"], plugin.DEFAULT_CONFIG)
+
+    def test_host_protocol_partial_with_merges_defaults(self):
+        line = json.dumps({
+            "method": "execute",
+            "params": {
+                "step_id": "whisper.transcribe",
+                "with": {"model": "tiny"},
+                "context": {"file": {"path": "/data/Movie.mkv"}},
+            },
+        })
+        result = plugin.parse_execute(line)
+        self.assertEqual(result["config"]["model"], "tiny")
+        self.assertEqual(result["config"]["language"], "auto")  # default
+        self.assertTrue(result["config"]["skip_if_exists"])
+        self.assertEqual(result["config"]["compute_type"], "auto")
+
+    def test_legacy_flat_shape_with_explicit_config(self):
+        # Backward-compat: pre-fix test fixtures and any handwritten
+        # tests that send a flat top-level message keep parsing.
         line = json.dumps({
             "step_id": "whisper.transcribe",
             "ctx": {"file": {"path": "/data/Movie.mkv"}},
@@ -193,38 +251,21 @@ class ParseExecuteTests(unittest.TestCase):
         self.assertEqual(result["step_id"], "whisper.transcribe")
         self.assertEqual(result["file_path"], "/data/Movie.mkv")
         self.assertEqual(result["config"]["model"], "small")
-        self.assertEqual(result["config"]["language"], "en")
-        self.assertFalse(result["config"]["skip_if_exists"])
-        self.assertEqual(result["config"]["compute_type"], "int8")
-
-    def test_missing_config_fills_in_all_defaults(self):
-        line = json.dumps({
-            "step_id": "whisper.transcribe",
-            "ctx": {"file": {"path": "/data/Movie.mkv"}},
-        })
-        result = plugin.parse_execute(line)
-        self.assertEqual(result["config"], plugin.DEFAULT_CONFIG)
-
-    def test_partial_config_merges_with_defaults(self):
-        line = json.dumps({
-            "step_id": "whisper.transcribe",
-            "ctx": {"file": {"path": "/data/Movie.mkv"}},
-            "config": {"model": "tiny"},
-        })
-        result = plugin.parse_execute(line)
-        self.assertEqual(result["config"]["model"], "tiny")
-        self.assertEqual(result["config"]["language"], "auto")  # default
-        self.assertTrue(result["config"]["skip_if_exists"])
-        self.assertEqual(result["config"]["compute_type"], "auto")
 
     def test_missing_step_id_raises(self):
-        line = json.dumps({"ctx": {"file": {"path": "/x"}}})
+        line = json.dumps({
+            "method": "execute",
+            "params": {"context": {"file": {"path": "/x"}}},
+        })
         with self.assertRaises(plugin.ProtocolError) as ctx:
             plugin.parse_execute(line)
         self.assertIn("step_id", str(ctx.exception))
 
     def test_missing_file_path_raises(self):
-        line = json.dumps({"step_id": "whisper.transcribe", "ctx": {}})
+        line = json.dumps({
+            "method": "execute",
+            "params": {"step_id": "whisper.transcribe", "context": {}},
+        })
         with self.assertRaises(plugin.ProtocolError) as ctx:
             plugin.parse_execute(line)
         self.assertIn("file", str(ctx.exception).lower())
