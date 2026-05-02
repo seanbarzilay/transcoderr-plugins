@@ -14,10 +14,17 @@ step registry — no restart needed.
 .
 ├── index.json              # the catalog the server fetches
 ├── tarballs/               # pre-built plugin tarballs (sha256-pinned in index.json)
-│   └── size-report-0.1.0.tar.gz
-└── size-report/            # plugin source (mirror of what's in the tarball)
+│   ├── size-report-0.1.2.tar.gz
+│   └── whisper-0.1.0.tar.gz
+├── size-report/            # plugin source (mirror of what's in the tarball)
+│   ├── manifest.toml
+│   ├── bin/run
+│   ├── schema.json
+│   └── README.md
+└── whisper/                # Python plugin: sidecar .srt via faster-whisper
     ├── manifest.toml
     ├── bin/run
+    ├── plugin.py
     ├── schema.json
     └── README.md
 ```
@@ -35,6 +42,20 @@ compression ratio, so notify templates can render lines like:
 
 Pure POSIX shell + `awk` + `wc`. Provides two step names:
 `size.report.before` (run early) and `size.report.after` (run after `output`).
+
+### [`whisper`](whisper/)
+
+Generates a sidecar `<basename>.<lang>.srt` for the post-transcode
+output file using
+[faster-whisper](https://github.com/SYSTRAN/faster-whisper). GPU is
+auto-detected (`float16` on CUDA, `int8` on CPU). Provides one step:
+`whisper.transcribe` (run after `output`).
+
+Declares `runtimes = ["python3", "ffprobe"]` and a `deps` line that
+pip-installs faster-whisper + CUDA libs into the plugin's own directory
+at install + boot. Per-step config lets you pick the model
+(`large-v3-turbo` by default), pin a language, or skip when a sidecar
+already exists.
 
 ## Adding a plugin
 
