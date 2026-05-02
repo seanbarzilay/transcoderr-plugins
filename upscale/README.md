@@ -33,7 +33,6 @@ the project's GitHub).
 | `target_height` | `1080` | final output height after the model. If the model overshoots, lanczos-downscales to this. `0` disables the post-resize. |
 | `min_source_height` | `720` | self-gate: skip if `probe.streams[0].height >= this` |
 | `output_path` | `null` | absolute output path. `null` ⇒ sibling `<basename>.upscaled.mkv` |
-| `denoise_strength` | `0.5` | only respected by `realesr-general-x4v3` |
 | `tile_size` | `0` | `0` = auto. Smaller (e.g. `256`) trades speed for less VRAM on small GPUs. |
 
 ## Output

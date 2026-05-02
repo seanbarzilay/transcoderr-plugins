@@ -23,7 +23,6 @@ DEFAULT_CONFIG = {
     "target_height": 1080,
     "min_source_height": 720,
     "output_path": None,
-    "denoise_strength": 0.5,
     "tile_size": 0,
 }
 

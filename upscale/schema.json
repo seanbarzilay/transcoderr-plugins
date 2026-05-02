@@ -28,11 +28,6 @@
       "default": null,
       "description": "Absolute output path. Null => sibling <basename>.upscaled.mkv."
     },
-    "denoise_strength": {
-      "type": "number",
-      "default": 0.5,
-      "description": "Only respected by realesr-general-x4v3."
-    },
     "tile_size": {
       "type": "integer",
       "default": 0,

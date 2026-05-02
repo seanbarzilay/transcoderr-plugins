@@ -91,7 +91,6 @@ class ParseExecuteTests(unittest.TestCase):
                 "target_height": 720,
                 "min_source_height": 480,
                 "output_path": "/data/out.mkv",
-                "denoise_strength": 0.3,
                 "tile_size": 256,
             },
         })
