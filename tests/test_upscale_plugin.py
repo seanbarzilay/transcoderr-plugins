@@ -501,6 +501,18 @@ class RunMuxSubprocessTests(unittest.TestCase):
             self.assertIn("mux", str(ctx.exception).lower())
             self.assertIn("mux failed", str(ctx.exception))
 
+    def test_ffmpeg_not_found_raises(self):
+        with mock.patch.object(
+            plugin.subprocess, "run",
+            side_effect=FileNotFoundError("ffmpeg"),
+        ):
+            with self.assertRaises(plugin.ProtocolError) as ctx:
+                plugin.run_mux_subprocess(
+                    Path("/v.mkv"), Path("/o.mkv"), Path("/out.mkv"),
+                )
+            self.assertIn("ffmpeg", str(ctx.exception).lower())
+            self.assertIn("path", str(ctx.exception).lower())
+
 
 def _read_events(stdout: io.StringIO) -> list:
     return [json.loads(l) for l in stdout.getvalue().splitlines() if l.strip()]
