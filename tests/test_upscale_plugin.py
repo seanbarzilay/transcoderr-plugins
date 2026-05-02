@@ -1,17 +1,18 @@
 """Tests for upscale/plugin.py."""
 from __future__ import annotations
 
+import importlib.util
 import io
 import json
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-PLUGIN_DIR = Path(__file__).resolve().parents[1] / "upscale"
-sys.path.insert(0, str(PLUGIN_DIR))
-import plugin  # noqa: E402
+_PLUGIN_PATH = Path(__file__).resolve().parents[1] / "upscale" / "plugin.py"
+_spec = importlib.util.spec_from_file_location("upscale_plugin_under_test", _PLUGIN_PATH)
+plugin = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(plugin)
 
 
 class ImportSmokeTests(unittest.TestCase):
