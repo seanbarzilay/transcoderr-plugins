@@ -1,0 +1,4 @@
+#!/bin/sh
+# upscale plugin entrypoint. Pure-stdlib Python; no per-plugin venv.
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec python3 "$HERE/plugin.py"

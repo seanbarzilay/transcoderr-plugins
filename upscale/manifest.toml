@@ -1,0 +1,8 @@
+name = "upscale"
+version = "0.1.0"
+kind = "subprocess"
+entrypoint = "bin/run"
+provides_steps = ["upscale.video"]
+summary = "Upscales the video stream with Real-ESRGAN (ncnn-vulkan). Designed for SD-source upgrades."
+min_transcoderr_version = "0.27.0"
+runtimes = ["python3", "ffmpeg", "ffprobe", "realesrgan-ncnn-vulkan"]

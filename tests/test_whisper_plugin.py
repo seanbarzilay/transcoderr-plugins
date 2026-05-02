@@ -1,19 +1,19 @@
 """Tests for whisper/plugin.py."""
 from __future__ import annotations
 
+import importlib.util
 import io
 import json
-import sys
 import tempfile
 import unittest
 from collections import namedtuple
 from pathlib import Path
 from unittest import mock
 
-# Make the whisper plugin's plugin.py importable.
-PLUGIN_DIR = Path(__file__).resolve().parents[1] / "whisper"
-sys.path.insert(0, str(PLUGIN_DIR))
-import plugin  # noqa: E402
+_PLUGIN_PATH = Path(__file__).resolve().parents[1] / "whisper" / "plugin.py"
+_spec = importlib.util.spec_from_file_location("whisper_plugin_under_test", _PLUGIN_PATH)
+plugin = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(plugin)
 
 
 class ImportSmokeTests(unittest.TestCase):
