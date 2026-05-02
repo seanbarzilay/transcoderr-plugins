@@ -16,7 +16,7 @@ step registry — no restart needed.
 ├── tarballs/               # pre-built plugin tarballs (sha256-pinned in index.json)
 │   ├── size-report-0.1.2.tar.gz
 │   ├── upscale-0.1.0.tar.gz
-│   └── whisper-0.1.0.tar.gz
+│   └── whisper-0.1.4.tar.gz
 ├── size-report/            # plugin source (mirror of what's in the tarball)
 │   ├── manifest.toml
 │   ├── bin/run
