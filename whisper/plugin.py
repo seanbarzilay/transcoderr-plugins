@@ -152,6 +152,17 @@ def emit_log(msg: str, out=None) -> None:
     out.write(json.dumps({"event": "log", "msg": msg}, separators=(",", ":")) + "\n")
 
 
+def emit_progress(pct: float, out=None) -> None:
+    """Emit a progress event. `pct` is 0–100 (matches transcoderr convention).
+
+    The host turns this into a `StepProgress::Pct` event on the run
+    timeline; the live progress bar in the runs UI tracks it.
+    """
+    out = out if out is not None else sys.stdout
+    out.write(json.dumps({"event": "progress", "pct": pct}, separators=(",", ":")) + "\n")
+    out.flush()
+
+
 def emit_context_set(key: str, value: dict, out=None) -> None:
     out = out if out is not None else sys.stdout
     out.write(json.dumps({"event": "context_set", "key": key, "value": value}, separators=(",", ":")) + "\n")
@@ -234,7 +245,24 @@ def transcribe(file_path: Path, config: dict, *, stdout) -> dict | None:
         language=skip_lang,
         vad_filter=True,
     )
-    segments = list(segments_iter)
+
+    # Drain the segment iterator manually so we can emit progress as
+    # each segment lands. faster-whisper iterates segments roughly in
+    # source order (start time monotonic), so seg.end / total_duration
+    # is a fair completion estimate. Throttle to whole-percent jumps
+    # to keep the SSE bus quiet — for a 30-min file with ~5s segments
+    # that's ~100 events max, vs ~360 unthrottled.
+    total_duration = float(getattr(info, "duration", 0.0) or 0.0)
+    segments = []
+    last_pct = -1
+    for seg in segments_iter:
+        segments.append(seg)
+        if total_duration > 0:
+            pct = max(0.0, min(100.0, (seg.end / total_duration) * 100.0))
+            int_pct = int(pct)
+            if int_pct > last_pct:
+                emit_progress(pct, out=stdout)
+                last_pct = int_pct
 
     if not segments:
         emit_log("no speech detected, skipping", out=stdout)
@@ -243,6 +271,9 @@ def transcribe(file_path: Path, config: dict, *, stdout) -> dict | None:
     srt_text = format_srt(segments)
     sidecar = file_path.with_suffix(f".{info.language}.srt")
     write_srt_atomically(sidecar, srt_text)
+    # Final 100% so the progress bar lands cleanly even if the last
+    # segment ended below the duration (VAD trimming, silence at end).
+    emit_progress(100.0, out=stdout)
 
     elapsed = time.monotonic() - started
     return {

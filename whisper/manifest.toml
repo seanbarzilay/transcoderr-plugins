@@ -1,5 +1,5 @@
 name = "whisper"
-version = "0.1.3"
+version = "0.1.4"
 kind = "subprocess"
 entrypoint = "bin/run"
 provides_steps = ["whisper.transcribe"]
