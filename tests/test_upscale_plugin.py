@@ -207,5 +207,139 @@ class ProbeDimensionsTests(unittest.TestCase):
                 plugin.probe_dimensions(Path("/x"))
 
 
+class _FakePopen:
+    """Stand-in for subprocess.Popen used by run_upscale_subprocess tests."""
+
+    def __init__(self, stderr_lines: list, returncode: int = 0):
+        self.stderr = io.StringIO("\n".join(stderr_lines) + ("\n" if stderr_lines else ""))
+        self._returncode = returncode
+
+    def wait(self):
+        return self._returncode
+
+
+class RunUpscaleSubprocessTests(unittest.TestCase):
+    def test_argv_built_correctly(self):
+        captured = {}
+
+        def fake_popen(argv, **kwargs):
+            captured["argv"] = argv
+            captured["kwargs"] = kwargs
+            return _FakePopen(stderr_lines=[])
+
+        out = io.StringIO()
+        with mock.patch.object(plugin.subprocess, "Popen", side_effect=fake_popen):
+            plugin.run_upscale_subprocess(
+                Path("/in.mkv"), Path("/out.mkv"),
+                model="realesr-animevideov3",
+                scale=4,
+                tile_size=0,
+                stdout=out,
+            )
+        argv = captured["argv"]
+        self.assertEqual(argv[0], "realesrgan-ncnn-vulkan")
+        self.assertIn("-i", argv)
+        self.assertEqual(argv[argv.index("-i") + 1], "/in.mkv")
+        self.assertIn("-o", argv)
+        self.assertEqual(argv[argv.index("-o") + 1], "/out.mkv")
+        self.assertIn("-n", argv)
+        self.assertEqual(argv[argv.index("-n") + 1], "realesr-animevideov3")
+        self.assertIn("-s", argv)
+        self.assertEqual(argv[argv.index("-s") + 1], "4")
+
+    def test_tile_size_zero_omits_t_flag(self):
+        captured = {}
+
+        def fake_popen(argv, **kwargs):
+            captured["argv"] = argv
+            return _FakePopen(stderr_lines=[])
+
+        out = io.StringIO()
+        with mock.patch.object(plugin.subprocess, "Popen", side_effect=fake_popen):
+            plugin.run_upscale_subprocess(
+                Path("/in.mkv"), Path("/out.mkv"),
+                model="m", scale=4, tile_size=0, stdout=out,
+            )
+        self.assertNotIn("-t", captured["argv"])
+
+    def test_tile_size_nonzero_adds_t_flag(self):
+        captured = {}
+
+        def fake_popen(argv, **kwargs):
+            captured["argv"] = argv
+            return _FakePopen(stderr_lines=[])
+
+        out = io.StringIO()
+        with mock.patch.object(plugin.subprocess, "Popen", side_effect=fake_popen):
+            plugin.run_upscale_subprocess(
+                Path("/in.mkv"), Path("/out.mkv"),
+                model="m", scale=4, tile_size=256, stdout=out,
+            )
+        argv = captured["argv"]
+        self.assertIn("-t", argv)
+        self.assertEqual(argv[argv.index("-t") + 1], "256")
+
+    def test_progress_lines_become_progress_events(self):
+        stderr = ["1/100", "50/100", "100/100", "done"]
+        out = io.StringIO()
+        with mock.patch.object(
+            plugin.subprocess, "Popen",
+            return_value=_FakePopen(stderr_lines=stderr),
+        ):
+            plugin.run_upscale_subprocess(
+                Path("/in.mkv"), Path("/out.mkv"),
+                model="m", scale=4, tile_size=0, stdout=out,
+            )
+        events = [json.loads(l) for l in out.getvalue().splitlines() if l.strip()]
+        progress = [e for e in events if e["event"] == "progress"]
+        self.assertEqual(len(progress), 3)
+        self.assertEqual(progress[0], {"event": "progress", "done": 1, "total": 100})
+        self.assertEqual(progress[-1], {"event": "progress", "done": 100, "total": 100})
+
+    def test_nonzero_exit_raises_with_stderr_in_message(self):
+        stderr = ["model not found"]
+        out = io.StringIO()
+        with mock.patch.object(
+            plugin.subprocess, "Popen",
+            return_value=_FakePopen(stderr_lines=stderr, returncode=1),
+        ):
+            with self.assertRaises(plugin.ProtocolError) as ctx:
+                plugin.run_upscale_subprocess(
+                    Path("/in.mkv"), Path("/out.mkv"),
+                    model="bogus", scale=4, tile_size=0, stdout=out,
+                )
+            self.assertIn("realesrgan failed", str(ctx.exception))
+            self.assertIn("model not found", str(ctx.exception))
+
+    def test_oom_stderr_gets_actionable_message(self):
+        stderr = ["vkAllocateMemory failed: out of device memory"]
+        out = io.StringIO()
+        with mock.patch.object(
+            plugin.subprocess, "Popen",
+            return_value=_FakePopen(stderr_lines=stderr, returncode=1),
+        ):
+            with self.assertRaises(plugin.ProtocolError) as ctx:
+                plugin.run_upscale_subprocess(
+                    Path("/in.mkv"), Path("/out.mkv"),
+                    model="m", scale=4, tile_size=0, stdout=out,
+                )
+            self.assertIn("OOM", str(ctx.exception))
+            self.assertIn("tile_size", str(ctx.exception))
+
+    def test_binary_not_on_path_raises(self):
+        out = io.StringIO()
+        with mock.patch.object(
+            plugin.subprocess, "Popen",
+            side_effect=FileNotFoundError("realesrgan-ncnn-vulkan"),
+        ):
+            with self.assertRaises(plugin.ProtocolError) as ctx:
+                plugin.run_upscale_subprocess(
+                    Path("/in.mkv"), Path("/out.mkv"),
+                    model="m", scale=4, tile_size=0, stdout=out,
+                )
+            self.assertIn("realesrgan-ncnn-vulkan", str(ctx.exception).lower())
+            self.assertIn("path", str(ctx.exception).lower())
+
+
 if __name__ == "__main__":
     unittest.main()

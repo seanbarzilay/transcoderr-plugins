@@ -163,6 +163,60 @@ def probe_dimensions(file_path: Path) -> tuple[int, int]:
     return int(s["width"]), int(s["height"])
 
 
+def run_upscale_subprocess(
+    input_path: Path,
+    output_path: Path,
+    *,
+    model: str,
+    scale: int,
+    tile_size: int,
+    stdout,
+) -> None:
+    """Invoke realesrgan-ncnn-vulkan, stream progress events to stdout.
+
+    Raises ProtocolError on non-zero exit or missing binary.
+    """
+    argv = [
+        "realesrgan-ncnn-vulkan",
+        "-i", str(input_path),
+        "-o", str(output_path),
+        "-n", model,
+        "-s", str(scale),
+        "-f", "mkv",
+    ]
+    if tile_size and tile_size > 0:
+        argv.extend(["-t", str(tile_size)])
+
+    try:
+        proc = subprocess.Popen(
+            argv,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise ProtocolError("realesrgan-ncnn-vulkan not on PATH") from exc
+
+    stderr_lines: list[str] = []
+    if proc.stderr is not None:
+        for line in proc.stderr:
+            line = line.rstrip("\n")
+            stderr_lines.append(line)
+            parsed = parse_progress_line(line)
+            if parsed is not None:
+                done, total = parsed
+                emit_progress(done, total, out=stdout)
+
+    rc = proc.wait()
+    if rc != 0:
+        stderr_blob = "\n".join(stderr_lines).strip()
+        if "vkAllocateMemory" in stderr_blob or "out of device memory" in stderr_blob.lower():
+            raise ProtocolError(
+                "OOM during upscale; try a smaller tile_size"
+            )
+        raise ProtocolError(f"realesrgan failed: {stderr_blob}")
+
+
 def main(stdin=None, stdout=None) -> int:
     """Entry point. Reads init+execute from stdin, emits events to stdout."""
     raise NotImplementedError("filled in by Task 9")
