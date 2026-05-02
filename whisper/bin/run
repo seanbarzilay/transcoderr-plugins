@@ -1,6 +1,5 @@
 #!/bin/sh
-# whisper plugin entrypoint. Adds the per-plugin libs/ dir (populated
-# by manifest's `deps` line) to PYTHONPATH and execs plugin.py.
+# whisper plugin entrypoint. Execs the per-plugin venv's interpreter
+# (created by manifest's `deps` line at install + boot).
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-export PYTHONPATH="$HERE/libs${PYTHONPATH:+:$PYTHONPATH}"
-exec python3 "$HERE/plugin.py"
+exec "$HERE/venv/bin/python3" "$HERE/plugin.py"
