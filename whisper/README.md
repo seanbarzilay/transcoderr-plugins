@@ -12,9 +12,14 @@ otherwise it falls back to `int8` on CPU.
 ## Manifest dependencies
 
 - `runtimes = ["python3", "ffprobe"]` — both must be on `$PATH` at install time.
-- `deps = "pip install --target ./libs faster-whisper nvidia-cublas-cu12 'nvidia-cudnn-cu12==9.*'"`
-  — runs at install + boot. The `--target ./libs` keeps wheels inside
-  the plugin directory so the host's global Python isn't touched.
+- `deps = "python3 -m venv ./venv && ./venv/bin/pip install faster-whisper nvidia-cublas-cu12 'nvidia-cudnn-cu12==9.*'"`
+  — runs at install + boot. Creates a per-plugin virtual environment in
+  `./venv/` and installs the wheels into it, keeping the host's global
+  Python untouched. `python3 -m venv` and `pip install` are both
+  idempotent on an existing venv, so re-running on boot is safe.
+- `bin/run` execs `./venv/bin/python3 plugin.py` directly — no
+  PYTHONPATH gymnastics; the venv's interpreter has the right
+  `site-packages` baked in.
 - The CUDA libs are installed regardless of host hardware (~300MB on
   disk). They're loaded only if `device="auto"` finds a CUDA device,
   so CPU-only hosts pay disk but no runtime cost.
