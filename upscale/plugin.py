@@ -67,6 +67,35 @@ def parse_progress_line(line: str) -> tuple[int, int] | None:
     return done, total
 
 
+def parse_execute(line: str) -> dict:
+    """Parse a JSON-RPC execute line into step_id, file_path, and config.
+
+    Config defaults are filled in for any missing keys.
+    """
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError as exc:
+        raise ProtocolError(f"execute message is not valid JSON: {exc}") from exc
+
+    step_id = msg.get("step_id")
+    if not step_id:
+        raise ProtocolError("execute message missing step_id")
+
+    ctx = msg.get("ctx") or {}
+    file_path = (ctx.get("file") or {}).get("path")
+    if not file_path:
+        raise ProtocolError("execute message missing ctx.file.path")
+
+    user_config = msg.get("config") or {}
+    config = {**DEFAULT_CONFIG, **user_config}
+
+    return {
+        "step_id": step_id,
+        "file_path": file_path,
+        "config": config,
+    }
+
+
 def main(stdin=None, stdout=None) -> int:
     """Entry point. Reads init+execute from stdin, emits events to stdout."""
     raise NotImplementedError("filled in by Task 9")

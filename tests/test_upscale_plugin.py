@@ -79,5 +79,63 @@ class ParseProgressLineTests(unittest.TestCase):
         self.assertIsNone(plugin.parse_progress_line("0/0"))
 
 
+class ParseExecuteTests(unittest.TestCase):
+    def test_full_message_with_explicit_config(self):
+        line = json.dumps({
+            "step_id": "upscale.video",
+            "ctx": {"file": {"path": "/data/Movie.avi"}},
+            "config": {
+                "model": "realesr-general-x4v3",
+                "scale": 4,
+                "target_height": 720,
+                "min_source_height": 480,
+                "output_path": "/data/out.mkv",
+                "denoise_strength": 0.3,
+                "tile_size": 256,
+            },
+        })
+        result = plugin.parse_execute(line)
+        self.assertEqual(result["step_id"], "upscale.video")
+        self.assertEqual(result["file_path"], "/data/Movie.avi")
+        self.assertEqual(result["config"]["model"], "realesr-general-x4v3")
+        self.assertEqual(result["config"]["target_height"], 720)
+        self.assertEqual(result["config"]["output_path"], "/data/out.mkv")
+
+    def test_missing_config_fills_in_all_defaults(self):
+        line = json.dumps({
+            "step_id": "upscale.video",
+            "ctx": {"file": {"path": "/data/Movie.avi"}},
+        })
+        result = plugin.parse_execute(line)
+        self.assertEqual(result["config"], plugin.DEFAULT_CONFIG)
+
+    def test_partial_config_merges_with_defaults(self):
+        line = json.dumps({
+            "step_id": "upscale.video",
+            "ctx": {"file": {"path": "/data/Movie.avi"}},
+            "config": {"target_height": 720},
+        })
+        result = plugin.parse_execute(line)
+        self.assertEqual(result["config"]["target_height"], 720)
+        self.assertEqual(result["config"]["model"], "realesr-animevideov3")  # default
+        self.assertEqual(result["config"]["scale"], 4)
+
+    def test_missing_step_id_raises(self):
+        line = json.dumps({"ctx": {"file": {"path": "/x"}}})
+        with self.assertRaises(plugin.ProtocolError) as ctx:
+            plugin.parse_execute(line)
+        self.assertIn("step_id", str(ctx.exception))
+
+    def test_missing_file_path_raises(self):
+        line = json.dumps({"step_id": "upscale.video", "ctx": {}})
+        with self.assertRaises(plugin.ProtocolError) as ctx:
+            plugin.parse_execute(line)
+        self.assertIn("file", str(ctx.exception).lower())
+
+    def test_invalid_json_raises(self):
+        with self.assertRaises(plugin.ProtocolError):
+            plugin.parse_execute("{not json")
+
+
 if __name__ == "__main__":
     unittest.main()
