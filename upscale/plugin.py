@@ -277,9 +277,119 @@ def run_mux_subprocess(
         )
 
 
+def upscale_video(
+    file_path: Path, config: dict, *, stdout
+) -> dict | None:
+    """Run the full upscale pipeline. Returns ctx dict on success or None on benign skip.
+
+    Benign skip (source already at/above min_source_height) emits a log
+    event but no context_set. Errors raise ProtocolError; the caller
+    maps them to result events.
+    """
+    if not file_path.exists():
+        raise ProtocolError("file does not exist")
+
+    src_w, src_h = probe_dimensions(file_path)
+    if src_h >= config["min_source_height"]:
+        emit_log(
+            f"source already at {src_h}p (>= {config['min_source_height']}), skipping",
+            out=stdout,
+        )
+        return None
+
+    output_path = (
+        Path(config["output_path"])
+        if config.get("output_path")
+        else file_path.with_name(f"{file_path.stem}.upscaled.mkv")
+    )
+
+    started = time.monotonic()
+    work_dir = Path(tempfile.mkdtemp(prefix=f"transcoderr-upscale-{os.getpid()}-"))
+    try:
+        upscaled = work_dir / "upscaled.mkv"
+        run_upscale_subprocess(
+            file_path, upscaled,
+            model=config["model"],
+            scale=config["scale"],
+            tile_size=config["tile_size"],
+            stdout=stdout,
+        )
+
+        # After model: native scale = src × scale.
+        model_w = src_w * config["scale"]
+        model_h = src_h * config["scale"]
+
+        target_h = config["target_height"]
+        # Only lanczos-downscale if the model OVERSHOOT target height.
+        # If the model output is at or below target (small source +
+        # modest scale), we accept the model output as-is rather than
+        # lanczos-UPSCALING further — that would defeat the purpose of
+        # using the AI model as the sole upscaler.
+        if target_h and target_h > 0 and model_h > target_h:
+            resized = work_dir / "resized.mkv"
+            run_downscale_subprocess(upscaled, resized, target_height=target_h)
+            video_only = resized
+            final_w, final_h = compute_target_height(model_w, model_h, target_h)
+        else:
+            video_only = upscaled
+            final_w, final_h = model_w, model_h
+
+        run_mux_subprocess(video_only, file_path, output_path)
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+    elapsed = time.monotonic() - started
+    return {
+        "path": str(output_path),
+        "from": f"{src_w}x{src_h}",
+        "to": f"{final_w}x{final_h}",
+        "model": config["model"],
+        "duration_sec": round(elapsed, 3),
+    }
+
+
 def main(stdin=None, stdout=None) -> int:
-    """Entry point. Reads init+execute from stdin, emits events to stdout."""
-    raise NotImplementedError("filled in by Task 9")
+    """Read init+execute from stdin, drive upscale_video, emit events to stdout."""
+    stdin = stdin if stdin is not None else sys.stdin
+    stdout = stdout if stdout is not None else sys.stdout
+
+    try:
+        _init_line = stdin.readline()
+        if not _init_line:
+            emit_result_err("no init message on stdin", out=stdout)
+            return 0
+        exec_line = stdin.readline()
+        if not exec_line:
+            emit_result_err("no execute message on stdin", out=stdout)
+            return 0
+
+        try:
+            parsed = parse_execute(exec_line)
+        except ProtocolError as exc:
+            emit_result_err(str(exc), out=stdout)
+            return 0
+
+        if parsed["step_id"] != "upscale.video":
+            emit_result_err(f"unknown step_id: {parsed['step_id']}", out=stdout)
+            return 0
+
+        try:
+            ctx_value = upscale_video(
+                Path(parsed["file_path"]),
+                parsed["config"],
+                stdout=stdout,
+            )
+        except ProtocolError as exc:
+            emit_result_err(str(exc), out=stdout)
+            return 0
+
+        if ctx_value is not None:
+            emit_context_set("upscale", ctx_value, out=stdout)
+        emit_result_ok(out=stdout)
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        emit_result_err(f"unexpected error: {exc}", out=stdout)
+        return 0
 
 
 if __name__ == "__main__":

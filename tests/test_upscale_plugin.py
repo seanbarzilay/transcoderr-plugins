@@ -474,5 +474,147 @@ class RunMuxSubprocessTests(unittest.TestCase):
             self.assertIn("mux failed", str(ctx.exception))
 
 
+def _read_events(stdout: io.StringIO) -> list:
+    return [json.loads(l) for l in stdout.getvalue().splitlines() if l.strip()]
+
+
+class MainTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.video = self.dir / "Movie.avi"
+        self.video.write_text("video bytes")  # presence is enough
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _run(self, *, file_path=None, config=None,
+             probe_dims=(720, 480),
+             upscale_side_effect=None,
+             downscale_side_effect=None,
+             mux_side_effect=None):
+        file_path = file_path if file_path is not None else self.video
+        config = config or {}
+        stdin = io.StringIO()
+        stdin.write('{"event":"init"}\n')
+        stdin.write(json.dumps({
+            "step_id": "upscale.video",
+            "ctx": {"file": {"path": str(file_path)}},
+            "config": config,
+        }) + "\n")
+        stdin.seek(0)
+        stdout = io.StringIO()
+
+        def default_upscale(input_path, output_path, **kwargs):
+            Path(output_path).write_text("upscaled")
+
+        def default_downscale(input_path, output_path, **kwargs):
+            Path(output_path).write_text("downscaled")
+
+        def default_mux(video_only, original, output_path, **kwargs):
+            Path(output_path).write_text("muxed")
+
+        with mock.patch.object(plugin, "probe_dimensions", return_value=probe_dims), \
+             mock.patch.object(plugin, "run_upscale_subprocess",
+                               side_effect=upscale_side_effect or default_upscale), \
+             mock.patch.object(plugin, "run_downscale_subprocess",
+                               side_effect=downscale_side_effect or default_downscale), \
+             mock.patch.object(plugin, "run_mux_subprocess",
+                               side_effect=mux_side_effect or default_mux):
+            rc = plugin.main(stdin=stdin, stdout=stdout)
+        return rc, _read_events(stdout)
+
+    def test_happy_path_dvd_to_1080_emits_context_and_writes_file(self):
+        rc, events = self._run(probe_dims=(720, 480))
+        self.assertEqual(rc, 0)
+        out = self.dir / "Movie.upscaled.mkv"
+        self.assertTrue(out.exists())
+
+        kinds = [e["event"] for e in events]
+        self.assertIn("context_set", kinds)
+        self.assertEqual(events[-1], {"event": "result", "status": "ok", "outputs": {}})
+
+        ctx_set = next(e for e in events if e["event"] == "context_set")
+        self.assertEqual(ctx_set["key"], "upscale")
+        self.assertEqual(ctx_set["value"]["from"], "720x480")
+        # 720x480 → x4 → 2880x1920 → downscaled to 1620x1080
+        self.assertEqual(ctx_set["value"]["to"], "1620x1080")
+        self.assertEqual(ctx_set["value"]["model"], "realesr-animevideov3")
+        self.assertEqual(ctx_set["value"]["path"], str(out))
+
+    def test_self_gate_skips_when_already_hd(self):
+        rc, events = self._run(probe_dims=(1920, 1080))
+        self.assertEqual(rc, 0)
+        self.assertEqual(events[-1]["status"], "ok")
+        kinds = [e["event"] for e in events]
+        self.assertIn("log", kinds)
+        self.assertNotIn("context_set", kinds)
+
+    def test_target_zero_skips_downscale(self):
+        rc, events = self._run(
+            probe_dims=(720, 480),
+            config={"target_height": 0},
+        )
+        self.assertEqual(rc, 0)
+        ctx_set = next(e for e in events if e["event"] == "context_set")
+        self.assertEqual(ctx_set["value"]["to"], "2880x1920")
+
+    def test_skips_downscale_when_model_output_is_below_target(self):
+        # 240x160 × 4 = 960x640. Target 1080 — but the model already
+        # undershoots; the orchestrator must NOT lanczos-upscale further.
+        # ctx.to should reflect the raw model output, not the target.
+        rc, events = self._run(
+            probe_dims=(240, 160),
+            config={"min_source_height": 720, "target_height": 1080},
+        )
+        self.assertEqual(rc, 0)
+        ctx_set = next(e for e in events if e["event"] == "context_set")
+        self.assertEqual(ctx_set["value"]["to"], "960x640")
+
+    def test_explicit_output_path_is_honored(self):
+        out = self.dir / "custom-out.mkv"
+        rc, events = self._run(
+            probe_dims=(720, 480),
+            config={"output_path": str(out)},
+        )
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.exists())
+        ctx_set = next(e for e in events if e["event"] == "context_set")
+        self.assertEqual(ctx_set["value"]["path"], str(out))
+
+    def test_missing_file_returns_error(self):
+        rc, events = self._run(file_path=self.dir / "nope.mkv")
+        self.assertEqual(rc, 0)
+        self.assertEqual(events[-1]["status"], "error")
+        self.assertIn("does not exist", events[-1]["error"]["msg"])
+
+    def test_upscale_subprocess_oom_returns_error(self):
+        def raise_oom(*a, **kw):
+            raise plugin.ProtocolError("OOM during upscale; try a smaller tile_size")
+
+        rc, events = self._run(
+            probe_dims=(720, 480),
+            upscale_side_effect=raise_oom,
+        )
+        self.assertEqual(rc, 0)
+        self.assertEqual(events[-1]["status"], "error")
+        self.assertIn("OOM", events[-1]["error"]["msg"])
+
+    def test_unknown_step_id_returns_error(self):
+        stdin = io.StringIO()
+        stdin.write('{"event":"init"}\n')
+        stdin.write(json.dumps({
+            "step_id": "upscale.unknown",
+            "ctx": {"file": {"path": str(self.video)}},
+        }) + "\n")
+        stdin.seek(0)
+        stdout = io.StringIO()
+        rc = plugin.main(stdin=stdin, stdout=stdout)
+        events = _read_events(stdout)
+        self.assertEqual(rc, 0)
+        self.assertEqual(events[-1]["status"], "error")
+        self.assertIn("step_id", events[-1]["error"]["msg"])
+
+
 if __name__ == "__main__":
     unittest.main()
