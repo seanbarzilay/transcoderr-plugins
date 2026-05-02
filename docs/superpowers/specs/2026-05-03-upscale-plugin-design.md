@@ -79,7 +79,6 @@ Context written under key `upscale` on success:
   "from": "720x480",
   "to": "1920x1080",
   "model": "realesr-animevideov3",
-  "frames": 129600,
   "duration_sec": 4218.3
 }
 ```
@@ -166,7 +165,7 @@ Functions:
   — single ffmpeg invocation with the lanczos filter.
 - `run_mux_subprocess(video_only_path, original_input, output_path)`
   — single ffmpeg invocation that maps streams and copies.
-- `transcribe_video(file_path, config, *, stdout) -> dict | None` —
+- `upscale_video(file_path, config, *, stdout) -> dict | None` —
   the orchestrator. Returns the ctx dict on success, or `None` for the
   benign skip case (source already at or above `min_source_height`).
 - `main(stdin, stdout)` — drives the protocol.
