@@ -133,6 +133,36 @@ def emit_result_err(msg: str, out=None) -> None:
     ) + "\n")
 
 
+def probe_dimensions(file_path: Path) -> tuple[int, int]:
+    """Return (width, height) of the first video stream in file_path."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-of", "json",
+                str(file_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise ProtocolError("ffprobe not on PATH") from exc
+
+    try:
+        data = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise ProtocolError(f"ffprobe returned invalid JSON: {exc}") from exc
+
+    streams = data.get("streams") or []
+    if not streams:
+        raise ProtocolError("no video stream found")
+    s = streams[0]
+    return int(s["width"]), int(s["height"])
+
+
 def main(stdin=None, stdout=None) -> int:
     """Entry point. Reads init+execute from stdin, emits events to stdout."""
     raise NotImplementedError("filled in by Task 9")

@@ -176,5 +176,36 @@ class StdoutWriterTests(unittest.TestCase):
         })
 
 
+class ProbeDimensionsTests(unittest.TestCase):
+    def _make_completed(self, stdout_str: str, returncode: int = 0):
+        cp = mock.MagicMock()
+        cp.stdout = stdout_str
+        cp.returncode = returncode
+        return cp
+
+    def test_returns_width_height_for_valid_video(self):
+        ffprobe_out = json.dumps({"streams": [{"width": 720, "height": 480}]})
+        with mock.patch.object(plugin.subprocess, "run", return_value=self._make_completed(ffprobe_out)):
+            self.assertEqual(plugin.probe_dimensions(Path("/x")), (720, 480))
+
+    def test_raises_when_no_video_stream(self):
+        ffprobe_out = json.dumps({"streams": []})
+        with mock.patch.object(plugin.subprocess, "run", return_value=self._make_completed(ffprobe_out)):
+            with self.assertRaises(plugin.ProtocolError) as ctx:
+                plugin.probe_dimensions(Path("/x"))
+            self.assertIn("video stream", str(ctx.exception).lower())
+
+    def test_raises_when_ffprobe_not_found(self):
+        with mock.patch.object(plugin.subprocess, "run", side_effect=FileNotFoundError("ffprobe")):
+            with self.assertRaises(plugin.ProtocolError) as ctx:
+                plugin.probe_dimensions(Path("/x"))
+            self.assertIn("ffprobe", str(ctx.exception).lower())
+
+    def test_raises_when_ffprobe_returns_invalid_json(self):
+        with mock.patch.object(plugin.subprocess, "run", return_value=self._make_completed("not json")):
+            with self.assertRaises(plugin.ProtocolError):
+                plugin.probe_dimensions(Path("/x"))
+
+
 if __name__ == "__main__":
     unittest.main()
