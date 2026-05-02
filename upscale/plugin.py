@@ -217,6 +217,35 @@ def run_upscale_subprocess(
         raise ProtocolError(f"realesrgan failed: {stderr_blob}")
 
 
+def run_downscale_subprocess(
+    input_path: Path, output_path: Path, *, target_height: int
+) -> None:
+    """Lanczos-downscale input_path to (-2:target_height) and re-encode.
+
+    Intermediate codec is libx264 ultrafast crf=18 — file is transient
+    (consumed by the next mux step via -c copy). Raises ProtocolError on
+    non-zero exit.
+    """
+    argv = [
+        "ffmpeg", "-y",
+        "-i", str(input_path),
+        "-vf", f"scale=-2:{target_height}:flags=lanczos",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-crf", "18",
+        str(output_path),
+    ]
+    try:
+        result = subprocess.run(argv, check=False, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise ProtocolError("ffmpeg not on PATH") from exc
+
+    if result.returncode != 0:
+        raise ProtocolError(
+            f"downscale ffmpeg failed: {(result.stderr or '').strip()}"
+        )
+
+
 def main(stdin=None, stdout=None) -> int:
     """Entry point. Reads init+execute from stdin, emits events to stdout."""
     raise NotImplementedError("filled in by Task 9")

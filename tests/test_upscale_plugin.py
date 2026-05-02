@@ -341,5 +341,73 @@ class RunUpscaleSubprocessTests(unittest.TestCase):
             self.assertIn("path", str(ctx.exception).lower())
 
 
+class RunDownscaleSubprocessTests(unittest.TestCase):
+    def _make_completed(self, returncode: int = 0, stderr: str = ""):
+        cp = mock.MagicMock()
+        cp.returncode = returncode
+        cp.stderr = stderr
+        return cp
+
+    def test_argv_uses_lanczos_and_target_height(self):
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured["argv"] = argv
+            return self._make_completed()
+
+        with mock.patch.object(plugin.subprocess, "run", side_effect=fake_run):
+            plugin.run_downscale_subprocess(
+                Path("/in.mkv"), Path("/out.mkv"), target_height=1080,
+            )
+        argv = captured["argv"]
+        self.assertEqual(argv[0], "ffmpeg")
+        self.assertIn("-vf", argv)
+        vf = argv[argv.index("-vf") + 1]
+        self.assertIn("scale=-2:1080", vf)
+        self.assertIn("flags=lanczos", vf)
+        self.assertIn("libx264", argv)
+        self.assertIn("ultrafast", argv)
+        self.assertIn("18", argv)  # CRF
+        self.assertEqual(argv[-1], "/out.mkv")
+
+    def test_overwrites_existing_output(self):
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured["argv"] = argv
+            return self._make_completed()
+
+        with mock.patch.object(plugin.subprocess, "run", side_effect=fake_run):
+            plugin.run_downscale_subprocess(
+                Path("/in.mkv"), Path("/out.mkv"), target_height=1080,
+            )
+        # -y forces overwrite without prompting.
+        self.assertIn("-y", captured["argv"])
+
+    def test_nonzero_exit_raises_with_stderr(self):
+        with mock.patch.object(
+            plugin.subprocess, "run",
+            return_value=self._make_completed(returncode=1, stderr="bad codec"),
+        ):
+            with self.assertRaises(plugin.ProtocolError) as ctx:
+                plugin.run_downscale_subprocess(
+                    Path("/in.mkv"), Path("/out.mkv"), target_height=1080,
+                )
+            self.assertIn("downscale", str(ctx.exception).lower())
+            self.assertIn("bad codec", str(ctx.exception))
+
+    def test_ffmpeg_not_found_raises(self):
+        with mock.patch.object(
+            plugin.subprocess, "run",
+            side_effect=FileNotFoundError("ffmpeg"),
+        ):
+            with self.assertRaises(plugin.ProtocolError) as ctx:
+                plugin.run_downscale_subprocess(
+                    Path("/in.mkv"), Path("/out.mkv"), target_height=1080,
+                )
+            self.assertIn("ffmpeg", str(ctx.exception).lower())
+            self.assertIn("path", str(ctx.exception).lower())
+
+
 if __name__ == "__main__":
     unittest.main()
