@@ -329,6 +329,12 @@ class StdoutWriterTests(unittest.TestCase):
             "error": {"msg": "oops"},
         })
 
+    def test_emit_progress(self):
+        buf = io.StringIO()
+        plugin.emit_progress(42.5, out=buf)
+        msg = json.loads(buf.getvalue().rstrip("\n"))
+        self.assertEqual(msg, {"event": "progress", "pct": 42.5})
+
 
 class HasAudioStreamTests(unittest.TestCase):
     def _make_completed(self, stdout: str, returncode: int = 0):
@@ -359,18 +365,20 @@ class HasAudioStreamTests(unittest.TestCase):
 
 
 class _FakeInfo:
-    def __init__(self, language: str):
+    def __init__(self, language: str, duration: float = 0.0):
         self.language = language
+        self.duration = duration
 
 
 class _FakeModel:
-    def __init__(self, segments, language="en"):
+    def __init__(self, segments, language="en", duration: float = 0.0):
         self._segments = segments
         self._language = language
+        self._duration = duration
 
     def transcribe(self, file_path, language=None, vad_filter=True):
         assert vad_filter is True, "vad_filter must be True"
-        return iter(self._segments), _FakeInfo(self._language)
+        return iter(self._segments), _FakeInfo(self._language, self._duration)
 
 
 def _read_events(stdout: io.StringIO) -> list:
@@ -450,6 +458,53 @@ class MainTests(unittest.TestCase):
         self.assertEqual(events[-1]["status"], "ok")
         kinds = [e["event"] for e in events]
         self.assertNotIn("context_set", kinds)
+
+    def test_emits_progress_events_during_transcribe(self):
+        # 100s of audio split into 4 segments. Progress should fire at
+        # whole-percent jumps as each segment lands, plus a final 100.0.
+        model = _FakeModel(
+            segments=[
+                _Segment(0.0, 30.0, "First chunk."),
+                _Segment(30.0, 60.0, "Second chunk."),
+                _Segment(60.0, 90.0, "Third chunk."),
+                _Segment(90.0, 100.0, "Last chunk."),
+            ],
+            language="en",
+            duration=100.0,
+        )
+        rc, events = self._run(model=model)
+        self.assertEqual(rc, 0)
+        self.assertEqual(events[-1], {"event": "result", "status": "ok", "outputs": {}})
+
+        progress = [e for e in events if e["event"] == "progress"]
+        self.assertGreaterEqual(len(progress), 4, f"expected >=4 progress events, got {len(progress)}")
+
+        pcts = [p["pct"] for p in progress]
+        # Monotonic non-decreasing.
+        for prev, cur in zip(pcts, pcts[1:]):
+            self.assertGreaterEqual(cur, prev, f"progress went backwards: {prev} -> {cur}")
+        # Capped at 100.
+        for p in pcts:
+            self.assertLessEqual(p, 100.0)
+        # Final emission is exactly 100.
+        self.assertEqual(pcts[-1], 100.0)
+
+    def test_no_progress_when_duration_unknown(self):
+        # If faster-whisper's info object lacks a usable duration, the
+        # plugin still completes the run but emits no progress events
+        # (rather than emitting bogus pct values).
+        model = _FakeModel(
+            segments=[_Segment(0.0, 1.0, "Hello.")],
+            language="en",
+            duration=0.0,  # falsy -> skip per-segment emission
+        )
+        rc, events = self._run(model=model)
+        self.assertEqual(rc, 0)
+        progress = [e for e in events if e["event"] == "progress"]
+        # The final "100.0 done" emission still fires (gives the run UI
+        # a clean end state) — but no per-segment ones.
+        self.assertEqual(len(progress), 1)
+        self.assertEqual(progress[0]["pct"], 100.0)
 
     def test_no_speech_detected_emits_ok_without_srt(self):
         empty_model = _FakeModel(segments=[], language="en")
