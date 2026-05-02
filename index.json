@@ -19,6 +19,26 @@
       "runtimes": []
     },
     {
+      "name": "upscale",
+      "version": "0.1.0",
+      "summary": "Upscales the video stream with Real-ESRGAN (ncnn-vulkan). Designed for SD-source upgrades.",
+      "tarball_url": "https://raw.githubusercontent.com/seanbarzilay/transcoderr-plugins/main/tarballs/upscale-0.1.0.tar.gz",
+      "tarball_sha256": "41faee31cd9bf914325293b1b29bebaaaadb646468c512d695d4bd302e975154",
+      "homepage": "https://github.com/seanbarzilay/transcoderr-plugins/tree/main/upscale",
+      "min_transcoderr_version": "0.27.0",
+      "kind": "subprocess",
+      "provides_steps": [
+        "upscale.video"
+      ],
+      "runtimes": [
+        "python3",
+        "ffmpeg",
+        "ffprobe",
+        "realesrgan-ncnn-vulkan"
+      ],
+      "deps": null
+    },
+    {
       "name": "whisper",
       "version": "0.1.4",
       "summary": "Generates a sidecar .srt for the output file using faster-whisper. GPU auto-detected.",
