@@ -15,10 +15,17 @@ step registry — no restart needed.
 ├── index.json              # the catalog the server fetches
 ├── tarballs/               # pre-built plugin tarballs (sha256-pinned in index.json)
 │   ├── size-report-0.1.2.tar.gz
+│   ├── upscale-0.1.0.tar.gz
 │   └── whisper-0.1.0.tar.gz
 ├── size-report/            # plugin source (mirror of what's in the tarball)
 │   ├── manifest.toml
 │   ├── bin/run
+│   ├── schema.json
+│   └── README.md
+├── upscale/                # Python plugin: AI upscaling via Real-ESRGAN (ncnn-vulkan)
+│   ├── manifest.toml
+│   ├── bin/run
+│   ├── plugin.py
 │   ├── schema.json
 │   └── README.md
 └── whisper/                # Python plugin: sidecar .srt via faster-whisper
@@ -56,6 +63,19 @@ pip-installs faster-whisper + CUDA libs into the plugin's own directory
 at install + boot. Per-step config lets you pick the model
 (`large-v3-turbo` by default), pin a language, or skip when a sidecar
 already exists.
+
+### [`upscale`](upscale/)
+
+AI-upscales the video stream with [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN)
+via the [`realesrgan-ncnn-vulkan`](https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan)
+binary. Designed for SD-source upgrades — DVD rips, VHS, anything well
+below 720p that the operator wants at clean 1080p. Vulkan-based, so it
+runs on AMD, Intel, NVIDIA, and Apple Silicon GPUs without a CUDA stack.
+
+Provides one step: `upscale.video` (run after `output`). Declares
+`runtimes = ["python3", "ffmpeg", "ffprobe", "realesrgan-ncnn-vulkan"]`.
+Per-step config lets you pick the model, target height, and gate by
+source resolution.
 
 ## Adding a plugin
 
