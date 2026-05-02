@@ -313,9 +313,10 @@ def upscale_video(
             stdout=stdout,
         )
 
-        # After model: native scale = src × scale.
-        model_w = src_w * config["scale"]
-        model_h = src_h * config["scale"]
+        # Probe the actual upscaled file rather than assuming src × scale.
+        # ncnn-vulkan can pad/round in edge cases; the probed dims are
+        # what the file actually contains.
+        model_w, model_h = probe_dimensions(upscaled)
 
         target_h = config["target_height"]
         # Only lanczos-downscale if the model OVERSHOOT target height.

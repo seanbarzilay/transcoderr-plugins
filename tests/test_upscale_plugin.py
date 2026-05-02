@@ -532,7 +532,19 @@ class MainTests(unittest.TestCase):
         def default_mux(video_only, original, output_path, **kwargs):
             Path(output_path).write_text("muxed")
 
-        with mock.patch.object(plugin, "probe_dimensions", return_value=probe_dims), \
+        # Build a probe_dimensions side_effect: first call returns the
+        # source dims (probe_dims); second call returns the arithmetic
+        # upscaled dims (src * scale) as a stand-in for what ncnn-vulkan
+        # would normally produce.  This keeps existing tests green after
+        # the fix that probes the upscaled file instead of computing
+        # src*scale arithmetically.
+        _scale = {**plugin.DEFAULT_CONFIG, **config}.get("scale", 4)
+        _probe_seq = iter([probe_dims, (probe_dims[0] * _scale, probe_dims[1] * _scale)])
+
+        def _probe_side_effect(path):
+            return next(_probe_seq)
+
+        with mock.patch.object(plugin, "probe_dimensions", side_effect=_probe_side_effect), \
              mock.patch.object(plugin, "run_upscale_subprocess",
                                side_effect=upscale_side_effect or default_upscale), \
              mock.patch.object(plugin, "run_downscale_subprocess",
@@ -588,6 +600,49 @@ class MainTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         ctx_set = next(e for e in events if e["event"] == "context_set")
         self.assertEqual(ctx_set["value"]["to"], "960x640")
+
+    def test_uses_probed_dims_of_upscaled_file_not_arithmetic(self):
+        # The orchestrator must probe the upscaled file for its actual
+        # dims rather than computing src*scale. Real ncnn-vulkan output
+        # may differ from the arithmetic prediction by a few pixels in
+        # edge cases (internal padding). Use a probe sequence that
+        # returns different dims for the source vs the upscaled file
+        # and verify ctx.to reflects the PROBED upscaled dims.
+
+        # Probe sequence: first call (source) returns 720x480; second
+        # call (upscaled file) returns 2884x1924 (slightly different
+        # from the arithmetic 2880x1920 due to imagined padding).
+        probe_results = iter([(720, 480), (2884, 1924)])
+
+        def fake_probe(path):
+            return next(probe_results)
+
+        stdin = io.StringIO()
+        stdin.write('{"event":"init"}\n')
+        stdin.write(json.dumps({
+            "step_id": "upscale.video",
+            "ctx": {"file": {"path": str(self.video)}},
+            "config": {"target_height": 0},  # disable downscale to keep ctx.to == probed dims
+        }) + "\n")
+        stdin.seek(0)
+        stdout = io.StringIO()
+
+        def default_upscale(input_path, output_path, **kwargs):
+            Path(output_path).write_text("upscaled")
+
+        def default_mux(video_only, original, output_path, **kwargs):
+            Path(output_path).write_text("muxed")
+
+        with mock.patch.object(plugin, "probe_dimensions", side_effect=fake_probe), \
+             mock.patch.object(plugin, "run_upscale_subprocess", side_effect=default_upscale), \
+             mock.patch.object(plugin, "run_mux_subprocess", side_effect=default_mux):
+            plugin.main(stdin=stdin, stdout=stdout)
+
+        events = _read_events(stdout)
+        ctx_set = next(e for e in events if e["event"] == "context_set")
+        # If the orchestrator probed the upscaled file, ctx.to is "2884x1924".
+        # If it used arithmetic (720*4 x 480*4), ctx.to is "2880x1920" — wrong.
+        self.assertEqual(ctx_set["value"]["to"], "2884x1924")
 
     def test_explicit_output_path_is_honored(self):
         out = self.dir / "custom-out.mkv"
