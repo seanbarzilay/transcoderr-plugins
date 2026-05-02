@@ -326,6 +326,24 @@ class RunUpscaleSubprocessTests(unittest.TestCase):
             self.assertIn("OOM", str(ctx.exception))
             self.assertIn("tile_size", str(ctx.exception))
 
+    def test_argv_does_not_include_bogus_f_format_flag(self):
+        # The -f flag in realesrgan-ncnn-vulkan is for image output
+        # format (jpg/png/webp), not video container — passing -f mkv
+        # is semantically wrong and should not appear in the argv.
+        captured = {}
+
+        def fake_popen(argv, **kwargs):
+            captured["argv"] = argv
+            return _FakePopen(stderr_lines=[])
+
+        out = io.StringIO()
+        with mock.patch.object(plugin.subprocess, "Popen", side_effect=fake_popen):
+            plugin.run_upscale_subprocess(
+                Path("/in.mkv"), Path("/out.mkv"),
+                model="m", scale=4, tile_size=0, stdout=out,
+            )
+        self.assertNotIn("-f", captured["argv"])
+
     def test_binary_not_on_path_raises(self):
         out = io.StringIO()
         with mock.patch.object(

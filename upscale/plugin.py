@@ -181,7 +181,6 @@ def run_upscale_subprocess(
         "-o", str(output_path),
         "-n", model,
         "-s", str(scale),
-        "-f", "mkv",
     ]
     if tile_size and tile_size > 0:
         argv.extend(["-t", str(tile_size)])
