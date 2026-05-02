@@ -206,6 +206,16 @@ class ProbeDimensionsTests(unittest.TestCase):
             with self.assertRaises(plugin.ProtocolError):
                 plugin.probe_dimensions(Path("/x"))
 
+    def test_raises_when_stream_lacks_dimensions(self):
+        # ffprobe can return a stream entry without width/height for
+        # damaged containers or image-only streams. Map to ProtocolError
+        # rather than letting the bare KeyError escape.
+        ffprobe_out = json.dumps({"streams": [{"index": 0}]})
+        with mock.patch.object(plugin.subprocess, "run", return_value=self._make_completed(ffprobe_out)):
+            with self.assertRaises(plugin.ProtocolError) as ctx:
+                plugin.probe_dimensions(Path("/x"))
+            self.assertIn("width", str(ctx.exception).lower())
+
 
 class _FakePopen:
     """Stand-in for subprocess.Popen used by run_upscale_subprocess tests."""

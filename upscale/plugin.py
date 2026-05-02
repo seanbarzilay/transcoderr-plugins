@@ -158,7 +158,12 @@ def probe_dimensions(file_path: Path) -> tuple[int, int]:
     if not streams:
         raise ProtocolError("no video stream found")
     s = streams[0]
-    return int(s["width"]), int(s["height"])
+    try:
+        return int(s["width"]), int(s["height"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProtocolError(
+            f"ffprobe stream did not include width/height: {exc}"
+        ) from exc
 
 
 def run_upscale_subprocess(
