@@ -1,5 +1,5 @@
 name = "whisper"
-version = "0.1.4"
+version = "0.1.5"
 kind = "subprocess"
 entrypoint = "bin/run"
 provides_steps = ["whisper.transcribe"]
@@ -7,3 +7,12 @@ summary = "Generates a sidecar .srt for the output file using faster-whisper. GP
 min_transcoderr_version = "0.27.0"
 runtimes = ["python3", "ffprobe"]
 deps = "python3 -m venv ./venv && ./venv/bin/pip install faster-whisper nvidia-cublas-cu12 'nvidia-cudnn-cu12==9.*'"
+
+# Per-step routing (transcoderr v0.36.0+, Piece 5 of distributed
+# transcoding). `any-worker` means the dispatcher may route this step
+# to any connected remote worker that has the plugin installed —
+# whisper is the canonical heavy-CPU/GPU offload candidate. Older
+# coordinators (<v0.36.0) ignore this block and run the step locally
+# as before; nothing breaks for them.
+[steps."whisper.transcribe"]
+executor = "any-worker"
