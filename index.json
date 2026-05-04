@@ -40,10 +40,10 @@
     },
     {
       "name": "whisper",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "summary": "Generates a sidecar .srt for the output file using faster-whisper. GPU auto-detected.",
-      "tarball_url": "https://raw.githubusercontent.com/seanbarzilay/transcoderr-plugins/main/tarballs/whisper-0.1.4.tar.gz",
-      "tarball_sha256": "d63b4344d6ab834a8a666db8d62f6521c0675f071b3ed3b3137ba668aec32aab",
+      "tarball_url": "https://raw.githubusercontent.com/seanbarzilay/transcoderr-plugins/main/tarballs/whisper-0.1.5.tar.gz",
+      "tarball_sha256": "449003f502c41f8246ac9abfa9f35a051397a6df084fc62735e5b1748beab97f",
       "homepage": "https://github.com/seanbarzilay/transcoderr-plugins/tree/main/whisper",
       "min_transcoderr_version": "0.27.0",
       "kind": "subprocess",
