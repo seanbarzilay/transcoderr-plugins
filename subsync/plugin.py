@@ -54,7 +54,7 @@ def emit_result_err(msg: str, out=None) -> None:
     out.write(json.dumps({"event": "result", "status": "error", "error": {"msg": msg}}, separators=(",", ":")) + "\n")
 
 
-# ---- Protocol parsing (skeleton; expanded in Task 2) ------------------
+# ---- Protocol parsing ------------------------------------------------
 
 def parse_execute(line: str) -> dict:
     """Parse a JSON-RPC execute line. Returns {step_id, file_path, ctx, config}.
@@ -314,7 +314,7 @@ def align_subtitle(
     }
 
 
-# ---- main (skeleton; expanded in Task 4) -------------------------------
+# ---- Main entrypoint --------------------------------------------------
 
 def main(stdin=None, stdout=None) -> int:
     """Read init+execute from stdin, drive the sync, emit events to stdout."""
@@ -368,7 +368,6 @@ def main(stdin=None, stdout=None) -> int:
                 video_path, srt_path, parsed["config"], stdout=stdout,
             )
         except ProtocolError as exc:
-            heartbeat_stop.set()
             emit_result_err(str(exc), out=stdout)
             return 0
         finally:

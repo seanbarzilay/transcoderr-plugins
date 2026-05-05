@@ -6,6 +6,17 @@ based speech-onset detection). Designed to drop in after
 `whisper.transcribe` to clean up timing drift in the whisper-generated
 sidecar.
 
+## Known limitation: Python version
+
+ffsubsync transitively depends on `webrtcvad` for voice-activity
+detection. As of this writing, `webrtcvad` does not build cleanly on
+Python 3.14 (it imports `pkg_resources` which was removed from the
+3.14 stdlib). The plugin's `deps` line creates the venv using whatever
+`python3` is on `$PATH` — if your transcoderr image ships Python 3.14
+or later, `pip install ffsubsync` will fail at install time. Use a
+container image with Python 3.11 / 3.12 / 3.13 until ffsubsync's
+dependency surface catches up.
+
 ## Flow snippet
 
 ```yaml
@@ -69,14 +80,3 @@ Notify templates can reference these fields, e.g.
 The plugin runs on the coordinator only — it's CPU-bound and finishes
 in 5–15s for a 90-min file, so the operational simplicity of skipping
 plugin-push to remote workers outweighs any locality benefit.
-
-### Python version note
-
-ffsubsync transitively depends on `webrtcvad` for voice-activity
-detection. As of this writing, `webrtcvad` does not build cleanly on
-Python 3.14 (it imports `pkg_resources` which was removed from the
-3.14 stdlib). The plugin's `deps` line creates the venv using whatever
-`python3` is on `$PATH` — if your transcoderr image ships Python 3.14
-or later, `pip install ffsubsync` will fail at install time. Use a
-container image with Python 3.11 / 3.12 / 3.13 until ffsubsync's
-dependency surface catches up.
