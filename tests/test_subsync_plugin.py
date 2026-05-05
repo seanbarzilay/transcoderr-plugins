@@ -394,3 +394,102 @@ class AlignSubtitleTests(unittest.TestCase):
             stdout=io.StringIO(),
         )
         self.assertIsNone(meta)
+
+
+class MainTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.video = self.dir / "Movie.mkv"
+        self.video.write_text("v")
+        self.srt = self.dir / "Movie.en.srt"
+        # Note: srt is NOT created in setUp; tests that need it must create it explicitly
+        # so that test_no_subtitle_found_skips_with_log_and_ok can test the no-match case.
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _build_stdin(self, *, file_path=None, config=None, ctx_steps=None):
+        ctx = {"file": {"path": str(file_path or self.video)}}
+        if ctx_steps is not None:
+            ctx["steps"] = ctx_steps
+        stdin = io.StringIO()
+        stdin.write('{"event":"init"}\n')
+        stdin.write(json.dumps({
+            "step_id": "subsync.align",
+            "ctx": ctx,
+            "config": config or {},
+        }) + "\n")
+        stdin.seek(0)
+        return stdin
+
+    def _patch_subprocess(self, returncode, stderr, write_tmp=True):
+        if write_tmp:
+            tmp = self.dir / "Movie.en.srt.subsync.tmp.srt"
+            tmp.write_text("SYNCED")
+        return mock.patch.object(
+            plugin.subprocess, "run",
+            return_value=_MockCompleted(returncode, stderr),
+        )
+
+    def test_happy_path_emits_context_set_and_replaces_srt(self):
+        self.srt.write_text("ORIGINAL")
+        ctx_steps = {"transcribe": {"subtitle_path": str(self.srt)}}
+        with self._patch_subprocess(0, "INFO:root:offset seconds: 1.234\n"):
+            stdout = io.StringIO()
+            rc = plugin.main(stdin=self._build_stdin(ctx_steps=ctx_steps),
+                             stdout=stdout)
+        self.assertEqual(rc, 0)
+        events = _read_events(stdout)
+        kinds = [e["event"] for e in events]
+        self.assertIn("context_set", kinds)
+        ctx_set = next(e for e in events if e["event"] == "context_set")
+        self.assertEqual(ctx_set["key"], "subsync")
+        self.assertEqual(ctx_set["value"]["offset_seconds"], 1.234)
+        self.assertEqual(ctx_set["value"]["subtitle_path"], str(self.srt))
+        self.assertEqual(events[-1], {"event": "result", "status": "ok", "outputs": {}})
+        self.assertEqual(self.srt.read_text(), "SYNCED")
+
+    def test_no_subtitle_found_skips_with_log_and_ok(self):
+        # No ctx steps and no glob match — just the .mkv with no sidecar.
+        with self._patch_subprocess(0, "INFO:root:offset seconds: 0\n",
+                                    write_tmp=False) as m:
+            stdout = io.StringIO()
+            rc = plugin.main(stdin=self._build_stdin(), stdout=stdout)
+        self.assertEqual(rc, 0)
+        events = _read_events(stdout)
+        kinds = [e["event"] for e in events]
+        self.assertNotIn("context_set", kinds)
+        self.assertEqual(events[-1]["status"], "ok")
+        # ffsubsync was never spawned because find_subtitle_path returned None.
+        m.assert_not_called()
+
+    def test_video_missing_returns_error(self):
+        self.srt.write_text("ORIGINAL")
+        self.video.unlink()
+        ctx_steps = {"transcribe": {"subtitle_path": str(self.srt)}}
+        stdout = io.StringIO()
+        with self._patch_subprocess(0, "INFO:root:offset seconds: 0\n",
+                                    write_tmp=False):
+            rc = plugin.main(stdin=self._build_stdin(ctx_steps=ctx_steps),
+                             stdout=stdout)
+        self.assertEqual(rc, 0)
+        events = _read_events(stdout)
+        self.assertEqual(events[-1]["status"], "error")
+        self.assertIn("video", events[-1]["error"]["msg"].lower())
+
+    def test_fail_on_no_match_propagates_error(self):
+        self.srt.write_text("ORIGINAL")
+        ctx_steps = {"transcribe": {"subtitle_path": str(self.srt)}}
+        stdout = io.StringIO()
+        with self._patch_subprocess(2, "ERROR:root:nope\n", write_tmp=False):
+            rc = plugin.main(
+                stdin=self._build_stdin(
+                    ctx_steps=ctx_steps,
+                    config={"fail_on_no_match": True},
+                ),
+                stdout=stdout,
+            )
+        self.assertEqual(rc, 0)
+        events = _read_events(stdout)
+        self.assertEqual(events[-1]["status"], "error")

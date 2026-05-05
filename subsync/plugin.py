@@ -341,8 +341,41 @@ def main(stdin=None, stdout=None) -> int:
             emit_result_err(f"unknown step_id: {parsed['step_id']}", out=stdout)
             return 0
 
-        # TODO(Task 4): real behavior. For Task 1 the plugin is a no-op
-        # that just acknowledges the protocol.
+        video_path = Path(parsed["file_path"])
+        srt_path = find_subtitle_path(parsed["config"], parsed["ctx"], video_path)
+        if srt_path is None:
+            emit_log("no subtitle file found to sync, skipping", out=stdout)
+            emit_result_ok(out=stdout)
+            return 0
+
+        # Heartbeat keeps the coordinator's 30s inter-frame timer alive
+        # even when ffsubsync sits inside ffmpeg audio extraction. The
+        # lock serialises heartbeat and any other writes so their bytes
+        # can't interleave on stdout.
+        emit_lock = threading.Lock()
+        heartbeat_stop = threading.Event()
+
+        def _heartbeat():
+            while not heartbeat_stop.wait(HEARTBEAT_INTERVAL_SECS):
+                with emit_lock:
+                    emit_log("syncing...", out=stdout)
+                    stdout.flush()
+
+        threading.Thread(target=_heartbeat, daemon=True).start()
+
+        try:
+            meta = align_subtitle(
+                video_path, srt_path, parsed["config"], stdout=stdout,
+            )
+        except ProtocolError as exc:
+            heartbeat_stop.set()
+            emit_result_err(str(exc), out=stdout)
+            return 0
+        finally:
+            heartbeat_stop.set()
+
+        if meta is not None:
+            emit_context_set("subsync", meta, out=stdout)
         emit_result_ok(out=stdout)
         return 0
     except Exception as exc:  # noqa: BLE001 — last-resort guard
