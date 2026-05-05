@@ -91,6 +91,91 @@ def parse_execute(line: str) -> dict:
     }
 
 
+# ---- Subtitle path resolution ------------------------------------------
+
+def find_subtitle_path(
+    config: dict,
+    ctx: dict,
+    video_path: Path,
+) -> Path | None:
+    """Resolve which .srt to sync.
+
+    Priority (per spec):
+      1. config["subtitle_path"] — operator-supplied override (already
+         template-resolved by the engine before we see it).
+      2. First step output in ctx["steps"][*] that has a `subtitle_path`
+         field. Auto-discovers the whisper plugin's output without the
+         operator wiring an explicit reference.
+      3. Glob `<basename>.*.srt` next to `video_path` and pick the most
+         recently modified.
+      4. None — caller treats this as a benign no-op (warn + result:ok).
+    """
+    override = (config.get("subtitle_path") or "").strip()
+    if override:
+        return Path(override)
+
+    steps = ctx.get("steps") or {}
+    if isinstance(steps, dict):
+        for value in steps.values():
+            if isinstance(value, dict):
+                candidate = value.get("subtitle_path")
+                if candidate:
+                    return Path(candidate)
+
+    pattern = str(video_path.with_suffix("")) + ".*.srt"
+    matches = glob(pattern)
+    if not matches:
+        return None
+    # Most recently modified among matches.
+    matches.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return Path(matches[0])
+
+
+# ---- ffsubsync stderr parsing ------------------------------------------
+
+# ffsubsync logs the computed offset to stderr in a line like
+# `INFO:root:offset seconds: 1.234`. The framerate scale is logged as
+# `INFO:root:framerate scale factor: 1.0`. Both formats are stable
+# enough to parse with a simple substring match — full version-pinning
+# happens via the requirements.txt but we don't depend on the exact
+# logger name in case ffsubsync internals change.
+
+def parse_offset_from_stderr(stderr: str) -> float | None:
+    """Return the computed offset in seconds, or None if not found."""
+    import re
+    m = re.search(r"offset\s+seconds:\s*([-+]?[0-9]*\.?[0-9]+)", stderr)
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
+
+
+def parse_framerate_corrected_from_stderr(stderr: str) -> bool:
+    """Return True if ffsubsync applied a non-1.0 framerate scale factor."""
+    import re
+    m = re.search(r"framerate\s+scale\s+factor:\s*([0-9]*\.?[0-9]+)", stderr)
+    if not m:
+        return False
+    try:
+        return abs(float(m.group(1)) - 1.0) > 1e-6
+    except ValueError:
+        return False
+
+
+# ---- Atomic in-place replacement --------------------------------------
+
+def atomic_replace(tmp_path: Path, target_path: Path) -> None:
+    """Move tmp_path over target_path atomically. Raises FileNotFoundError
+    if tmp_path doesn't exist; the caller is responsible for ensuring
+    ffsubsync wrote it.
+    """
+    if not tmp_path.exists():
+        raise FileNotFoundError(f"tmp output {tmp_path} not found")
+    os.replace(tmp_path, target_path)
+
+
 # ---- main (skeleton; expanded in Task 4) -------------------------------
 
 def main(stdin=None, stdout=None) -> int:
