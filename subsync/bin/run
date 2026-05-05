@@ -1,0 +1,7 @@
+#!/bin/sh
+# subsync plugin entrypoint. Execs the per-plugin venv's interpreter
+# (created by manifest's `deps` line at install). Simpler than whisper's
+# wrapper — no NVIDIA libs to dlopen, just exec python.
+set -eu
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec "$HERE/venv/bin/python3" "$HERE/plugin.py"

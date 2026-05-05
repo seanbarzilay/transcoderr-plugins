@@ -1,0 +1,9 @@
+name = "subsync"
+version = "0.1.0"
+kind = "subprocess"
+entrypoint = "bin/run"
+provides_steps = ["subsync.align"]
+summary = "Aligns an out-of-sync .srt to the audio of a video file using ffsubsync (VAD-based)."
+min_transcoderr_version = "0.27.0"
+runtimes = ["python3", "ffmpeg"]
+deps = "python3 -m venv ./venv && ./venv/bin/pip install ffsubsync"
