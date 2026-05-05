@@ -206,3 +206,191 @@ class AtomicReplaceTests(unittest.TestCase):
         tmp = self.dir / "missing.tmp.srt"
         with self.assertRaises(FileNotFoundError):
             plugin.atomic_replace(tmp, target)
+
+
+class _MockCompleted:
+    def __init__(self, returncode: int, stderr: str):
+        self.returncode = returncode
+        self.stderr = stderr
+        self.stdout = ""
+
+
+class RunFfsubsyncTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.video = self.dir / "Movie.mkv"
+        self.video.write_text("v")
+        self.srt = self.dir / "Movie.en.srt"
+        self.srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nHi.\n\n")
+        self.tmp_out = self.dir / "Movie.en.srt.subsync.tmp.srt"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_invokes_ffsubsync_with_expected_args(self):
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+            return _MockCompleted(0, "INFO:root:offset seconds: 1.0\n")
+
+        with mock.patch.object(plugin.subprocess, "run", side_effect=fake_run):
+            rc, stderr = plugin.run_ffsubsync(
+                self.video, self.srt, self.tmp_out,
+                max_offset_seconds=60, framerate_correction=True,
+            )
+        self.assertEqual(rc, 0)
+        self.assertIn("offset seconds", stderr)
+        # Verify the args we hand-construct are correct.
+        cmd = captured["cmd"]
+        self.assertIn(str(self.video), cmd)
+        self.assertIn("-i", cmd)
+        self.assertIn(str(self.srt), cmd)
+        self.assertIn("-o", cmd)
+        self.assertIn(str(self.tmp_out), cmd)
+        self.assertIn("--max-offset-seconds", cmd)
+        self.assertIn("60", cmd)
+        # framerate_correction=True ⇒ no --no-fix-framerate flag.
+        self.assertNotIn("--no-fix-framerate", cmd)
+
+    def test_no_fix_framerate_flag_added_when_disabled(self):
+        with mock.patch.object(plugin.subprocess, "run",
+                               return_value=_MockCompleted(0, "INFO:root:offset seconds: 0.0\n")) as m:
+            plugin.run_ffsubsync(
+                self.video, self.srt, self.tmp_out,
+                max_offset_seconds=30, framerate_correction=False,
+            )
+        cmd = m.call_args[0][0]
+        self.assertIn("--no-fix-framerate", cmd)
+
+    def test_filenotfound_raises_protocolerror(self):
+        with mock.patch.object(plugin.subprocess, "run",
+                               side_effect=FileNotFoundError("ffsubsync")):
+            with self.assertRaises(plugin.ProtocolError) as ctx:
+                plugin.run_ffsubsync(
+                    self.video, self.srt, self.tmp_out,
+                    max_offset_seconds=30, framerate_correction=True,
+                )
+            self.assertIn("ffsubsync", str(ctx.exception).lower())
+
+
+class AlignSubtitleTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.video = self.dir / "Movie.mkv"
+        self.video.write_text("v")
+        self.srt = self.dir / "Movie.en.srt"
+        self.srt.write_text("ORIGINAL")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _patch_subprocess(self, returncode: int, stderr: str, write_tmp: bool = True):
+        """Patch subprocess.run to fake ffsubsync. If write_tmp, also
+        materialise the synced output so atomic_replace can find it."""
+        if write_tmp:
+            tmp = self.dir / "Movie.en.srt.subsync.tmp.srt"
+            tmp.write_text("SYNCED")
+        return mock.patch.object(
+            plugin.subprocess, "run",
+            return_value=_MockCompleted(returncode, stderr),
+        )
+
+    def test_happy_path_replaces_srt_and_returns_metadata(self):
+        with self._patch_subprocess(0, "INFO:root:offset seconds: 1.234\n"):
+            stdout = io.StringIO()
+            meta = plugin.align_subtitle(
+                self.video, self.srt,
+                {"max_offset_seconds": 60, "framerate_correction": True,
+                 "fail_on_no_match": False},
+                stdout=stdout,
+            )
+        self.assertEqual(meta["subtitle_path"], str(self.srt))
+        self.assertEqual(meta["offset_seconds"], 1.234)
+        self.assertFalse(meta["framerate_corrected"])
+        self.assertEqual(self.srt.read_text(), "SYNCED")
+
+    def test_framerate_corrected_when_scale_nonunity(self):
+        stderr = ("INFO:root:offset seconds: 0.5\n"
+                  "INFO:root:framerate scale factor: 1.04\n")
+        with self._patch_subprocess(0, stderr):
+            meta = plugin.align_subtitle(
+                self.video, self.srt,
+                {"max_offset_seconds": 60, "framerate_correction": True,
+                 "fail_on_no_match": False},
+                stdout=io.StringIO(),
+            )
+        self.assertTrue(meta["framerate_corrected"])
+
+    def test_offset_exceeding_max_is_pass_through(self):
+        with self._patch_subprocess(0, "INFO:root:offset seconds: 999.0\n"):
+            stdout = io.StringIO()
+            meta = plugin.align_subtitle(
+                self.video, self.srt,
+                {"max_offset_seconds": 60, "framerate_correction": True,
+                 "fail_on_no_match": False},
+                stdout=stdout,
+            )
+        self.assertIsNone(meta)
+        self.assertEqual(self.srt.read_text(), "ORIGINAL")
+        events = _read_events(stdout)
+        self.assertTrue(any("exceeds max_offset_seconds" in e.get("msg", "") for e in events))
+
+    def test_unparseable_offset_is_pass_through(self):
+        with self._patch_subprocess(0, "INFO:root:done.\n"):
+            stdout = io.StringIO()
+            meta = plugin.align_subtitle(
+                self.video, self.srt,
+                {"max_offset_seconds": 60, "framerate_correction": True,
+                 "fail_on_no_match": False},
+                stdout=stdout,
+            )
+        self.assertIsNone(meta)
+        self.assertEqual(self.srt.read_text(), "ORIGINAL")
+
+    def test_nonzero_rc_warn_and_pass(self):
+        with self._patch_subprocess(2, "ERROR:root:something broke\n",
+                                    write_tmp=False):
+            stdout = io.StringIO()
+            meta = plugin.align_subtitle(
+                self.video, self.srt,
+                {"max_offset_seconds": 60, "framerate_correction": True,
+                 "fail_on_no_match": False},
+                stdout=stdout,
+            )
+        self.assertIsNone(meta)
+        self.assertEqual(self.srt.read_text(), "ORIGINAL")
+
+    def test_nonzero_rc_with_fail_on_no_match_raises(self):
+        with self._patch_subprocess(2, "ERROR:root:nope\n", write_tmp=False):
+            with self.assertRaises(plugin.ProtocolError):
+                plugin.align_subtitle(
+                    self.video, self.srt,
+                    {"max_offset_seconds": 60, "framerate_correction": True,
+                     "fail_on_no_match": True},
+                    stdout=io.StringIO(),
+                )
+
+    def test_missing_video_raises_protocolerror(self):
+        self.video.unlink()
+        with self.assertRaises(plugin.ProtocolError) as ctx:
+            plugin.align_subtitle(
+                self.video, self.srt,
+                {"max_offset_seconds": 60, "framerate_correction": True,
+                 "fail_on_no_match": False},
+                stdout=io.StringIO(),
+            )
+        self.assertIn("video", str(ctx.exception).lower())
+
+    def test_missing_srt_is_benign_skip(self):
+        self.srt.unlink()
+        meta = plugin.align_subtitle(
+            self.video, self.srt,
+            {"max_offset_seconds": 60, "framerate_correction": True,
+             "fail_on_no_match": False},
+            stdout=io.StringIO(),
+        )
+        self.assertIsNone(meta)

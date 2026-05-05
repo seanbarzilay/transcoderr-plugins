@@ -176,6 +176,144 @@ def atomic_replace(tmp_path: Path, target_path: Path) -> None:
     os.replace(tmp_path, target_path)
 
 
+# ---- ffsubsync invocation ----------------------------------------------
+
+# Path to the per-plugin venv's ffsubsync binary, computed relative to
+# this file at import time. Indirected through a function so tests can
+# monkeypatch it without touching the filesystem.
+
+def _ffsubsync_binary() -> str:
+    return str(Path(__file__).resolve().parent / "venv" / "bin" / "ffsubsync")
+
+
+def run_ffsubsync(
+    video_path: Path,
+    srt_path: Path,
+    tmp_out_path: Path,
+    *,
+    max_offset_seconds: float,
+    framerate_correction: bool,
+) -> tuple[int, str]:
+    """Spawn ffsubsync; return (returncode, captured_stderr).
+
+    The subprocess writes its synced output to `tmp_out_path`; the caller
+    is responsible for atomically renaming it over `srt_path` on success.
+    Captures stderr (where ffsubsync logs the computed offset) and
+    discards stdout (which ffsubsync uses for verbose ffmpeg passthrough
+    when run in some modes — we don't need it).
+    """
+    cmd = [
+        _ffsubsync_binary(),
+        str(video_path),
+        "-i", str(srt_path),
+        "-o", str(tmp_out_path),
+        "--max-offset-seconds", str(int(max_offset_seconds)),
+    ]
+    if not framerate_correction:
+        cmd.append("--no-fix-framerate")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise ProtocolError(
+            f"ffsubsync not on path at {_ffsubsync_binary()} "
+            f"(plugin install incomplete?)"
+        ) from exc
+
+    return result.returncode, result.stderr or ""
+
+
+# ---- High-level align orchestration ------------------------------------
+
+def align_subtitle(
+    video_path: Path,
+    srt_path: Path,
+    config: dict,
+    *,
+    stdout,
+) -> dict | None:
+    """Run ffsubsync against (video, srt). Apply the result if it's sane.
+
+    Returns the metadata dict to pass into context_set on success, or
+    None on a benign skip (warning emitted to stdout already).
+    Raises ProtocolError on conditions the caller should turn into
+    result:error.
+    """
+    if not video_path.exists():
+        raise ProtocolError(f"video file does not exist: {video_path}")
+    if not srt_path.exists():
+        emit_log(f"subtitle file does not exist: {srt_path}, skipping", out=stdout)
+        return None
+
+    max_offset = float(config.get("max_offset_seconds", 60.0))
+    framerate_correction = bool(config.get("framerate_correction", True))
+    fail_on_no_match = bool(config.get("fail_on_no_match", False))
+
+    tmp_out = srt_path.with_suffix(srt_path.suffix + ".subsync.tmp.srt")
+
+    rc, stderr = run_ffsubsync(
+        video_path,
+        srt_path,
+        tmp_out,
+        max_offset_seconds=max_offset,
+        framerate_correction=framerate_correction,
+    )
+
+    if rc != 0:
+        # Log the last few stderr lines so the operator has *something*
+        # to debug from. Then either fail or pass-through per config.
+        tail = "\n".join(stderr.strip().splitlines()[-5:])
+        emit_log(f"ffsubsync exited rc={rc}: {tail}", out=stdout)
+        # Best-effort cleanup; tmp may or may not exist depending on
+        # how far ffsubsync got.
+        try:
+            tmp_out.unlink()
+        except FileNotFoundError:
+            pass
+        if fail_on_no_match:
+            raise ProtocolError(f"ffsubsync failed (rc={rc})")
+        return None
+
+    offset = parse_offset_from_stderr(stderr)
+    if offset is None:
+        emit_log(
+            "ffsubsync did not emit a parseable offset; leaving original srt",
+            out=stdout,
+        )
+        try:
+            tmp_out.unlink()
+        except FileNotFoundError:
+            pass
+        return None
+
+    if abs(offset) > max_offset:
+        emit_log(
+            f"computed offset {offset:.3f}s exceeds max_offset_seconds "
+            f"({max_offset}s); leaving original srt",
+            out=stdout,
+        )
+        try:
+            tmp_out.unlink()
+        except FileNotFoundError:
+            pass
+        return None
+
+    framerate_corrected = parse_framerate_corrected_from_stderr(stderr)
+
+    atomic_replace(tmp_out, srt_path)
+
+    return {
+        "subtitle_path": str(srt_path),
+        "offset_seconds": round(offset, 3),
+        "framerate_corrected": framerate_corrected,
+    }
+
+
 # ---- main (skeleton; expanded in Task 4) -------------------------------
 
 def main(stdin=None, stdout=None) -> int:
