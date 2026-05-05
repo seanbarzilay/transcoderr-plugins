@@ -4,6 +4,8 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -493,3 +495,103 @@ class MainTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         events = _read_events(stdout)
         self.assertEqual(events[-1]["status"], "error")
+
+
+@unittest.skipUnless(
+    shutil.which("ffmpeg") and shutil.which("ffsubsync"),
+    "ffmpeg and ffsubsync must be installed for the smoke test",
+)
+class SmokeTest(unittest.TestCase):
+    """End-to-end round-trip with a synthetic video and an offset srt.
+
+    Generates a 30-second 320x240 silent video with a 1kHz beep at
+    t=10s, lasting 1s. The supplied .srt cue is intentionally placed
+    at t=5s — 5 seconds early. ffsubsync should detect the speech
+    (well, the beep) onset at 10s and shift the cue. Tolerance is
+    generous (±0.5s) because VAD-on-a-beep isn't a perfect speech
+    proxy; we're testing that the plugin pipeline runs end-to-end,
+    not that ffsubsync's accuracy is bit-exact.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.video = self.dir / "Synthetic.mkv"
+        self.srt = self.dir / "Synthetic.en.srt"
+
+        # 30s silent video with a 1kHz beep starting at t=10s, lasting 1s.
+        # Two ffmpeg input streams: a flat colour generator for video, and
+        # an aevalsrc that's silent for the first 10s and emits a sine for
+        # the next 1s, then silent again. Encode to a tiny mkv.
+        cmd = [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-f", "lavfi",
+            "-i", "color=c=black:s=320x240:d=30:r=10",
+            "-f", "lavfi",
+            "-i", (
+                "aevalsrc=exprs='if(between(t\\,10\\,11)\\,sin(2*PI*1000*t)\\,0)'"
+                ":duration=30:sample_rate=16000"
+            ),
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30",
+            "-c:a", "aac", "-b:a", "32k",
+            "-shortest",
+            str(self.video),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            self.skipTest(f"ffmpeg fixture build failed: {proc.stderr}")
+
+        # Subtitle cue placed at t=5..6 (intentionally 5s early).
+        self.srt.write_text(
+            "1\n"
+            "00:00:05,000 --> 00:00:06,000\n"
+            "BEEP\n\n"
+        )
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _read_first_cue_start_seconds(self, srt_text: str) -> float:
+        """Parse the start timestamp of cue 1 — `HH:MM:SS,mmm`."""
+        # Cue 1 is the first non-empty 3-line block in srt_text.
+        lines = [ln for ln in srt_text.splitlines() if ln.strip()]
+        ts_line = lines[1]  # `HH:MM:SS,mmm --> HH:MM:SS,mmm`
+        start = ts_line.split("-->")[0].strip()
+        h, m, rest = start.split(":")
+        s, ms = rest.split(",")
+        return int(h) * 3600 + int(m) * 60 + int(s) + int(ms) / 1000.0
+
+    def test_offset_subtitle_realigns_to_audio(self):
+        # Override _ffsubsync_binary() so we use the system one instead
+        # of the not-yet-existent ./venv/bin/ffsubsync.
+        with mock.patch.object(
+            plugin, "_ffsubsync_binary", return_value=shutil.which("ffsubsync")
+        ):
+            stdin = io.StringIO()
+            stdin.write('{"event":"init"}\n')
+            stdin.write(json.dumps({
+                "step_id": "subsync.align",
+                "ctx": {
+                    "file": {"path": str(self.video)},
+                    "steps": {"transcribe": {"subtitle_path": str(self.srt)}},
+                },
+                "config": {},
+            }) + "\n")
+            stdin.seek(0)
+            stdout = io.StringIO()
+            rc = plugin.main(stdin=stdin, stdout=stdout)
+
+        self.assertEqual(rc, 0, msg=f"plugin exited non-zero; events: {stdout.getvalue()}")
+        events = _read_events(stdout)
+        self.assertEqual(events[-1]["status"], "ok",
+                         msg=f"final event was not ok: {events[-1]}")
+
+        # Find the context_set event so we can pull the computed offset.
+        ctx_set = next((e for e in events if e["event"] == "context_set"), None)
+        self.assertIsNotNone(ctx_set, msg=f"no context_set emitted; events: {events}")
+
+        synced_text = self.srt.read_text()
+        cue_start = self._read_first_cue_start_seconds(synced_text)
+        # Expected: original 5.0 + offset ≈ 10.0. Allow ±0.5s for VAD jitter.
+        self.assertAlmostEqual(cue_start, 10.0, delta=0.5,
+                               msg=f"cue not at ~10s; full srt:\n{synced_text}")
