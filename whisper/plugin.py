@@ -10,10 +10,17 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from glob import glob
 from pathlib import Path
 from typing import Iterable
+
+# Heartbeat cadence for the dispatcher's inter-frame timer. The
+# transcoderr coordinator drops a remote step that goes 30s without
+# emitting any frame; faster-whisper can sit inside a single
+# ctranslate2 decode call for longer than that on hard passages.
+HEARTBEAT_INTERVAL_SECS = 10.0
 
 DEFAULT_CONFIG = {
     "model": "large-v3-turbo",
@@ -246,6 +253,21 @@ def transcribe(file_path: Path, config: dict, *, stdout) -> dict | None:
         vad_filter=True,
     )
 
+    # Heartbeat keeps the coordinator's 30s inter-frame timer alive
+    # even when ctranslate2 sits inside a single decode call for
+    # longer than that. The lock serialises heartbeat and progress
+    # writes so their bytes can't interleave on stdout.
+    emit_lock = threading.Lock()
+    heartbeat_stop = threading.Event()
+
+    def _heartbeat():
+        while not heartbeat_stop.wait(HEARTBEAT_INTERVAL_SECS):
+            with emit_lock:
+                emit_log("transcribing...", out=stdout)
+                stdout.flush()
+
+    threading.Thread(target=_heartbeat, daemon=True).start()
+
     # Drain the segment iterator manually so we can emit progress as
     # each segment lands. faster-whisper iterates segments roughly in
     # source order (start time monotonic), so seg.end / total_duration
@@ -255,14 +277,18 @@ def transcribe(file_path: Path, config: dict, *, stdout) -> dict | None:
     total_duration = float(getattr(info, "duration", 0.0) or 0.0)
     segments = []
     last_pct = -1
-    for seg in segments_iter:
-        segments.append(seg)
-        if total_duration > 0:
-            pct = max(0.0, min(100.0, (seg.end / total_duration) * 100.0))
-            int_pct = int(pct)
-            if int_pct > last_pct:
-                emit_progress(pct, out=stdout)
-                last_pct = int_pct
+    try:
+        for seg in segments_iter:
+            segments.append(seg)
+            if total_duration > 0:
+                pct = max(0.0, min(100.0, (seg.end / total_duration) * 100.0))
+                int_pct = int(pct)
+                if int_pct > last_pct:
+                    with emit_lock:
+                        emit_progress(pct, out=stdout)
+                    last_pct = int_pct
+    finally:
+        heartbeat_stop.set()
 
     if not segments:
         emit_log("no speech detected, skipping", out=stdout)
