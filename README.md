@@ -34,7 +34,13 @@ step registry — no restart needed.
 │   ├── plugin.py
 │   ├── schema.json
 │   └── README.md
-└── whisper/                # Python plugin: sidecar .srt via faster-whisper
+├── whisper/                # Python plugin: sidecar .srt via faster-whisper
+│   ├── manifest.toml
+│   ├── bin/run
+│   ├── plugin.py
+│   ├── schema.json
+│   └── README.md
+└── whisperx/               # Python plugin: forced phoneme alignment via WhisperX (wav2vec2)
     ├── manifest.toml
     ├── bin/run
     ├── plugin.py
@@ -89,6 +95,15 @@ pip-installs faster-whisper + CUDA libs into the plugin's own directory
 at install + boot. Per-step config lets you pick the model
 (`large-v3-turbo` by default), pin a language, or skip when a sidecar
 already exists.
+
+### [`whisperx`](whisperx/)
+
+Forced phoneme alignment for whisper-generated subtitles via
+[WhisperX](https://github.com/m-bain/whisperX) (wav2vec2 + faster-whisper).
+Produces per-word-accurate timestamps, much tighter than whisper's
+own per-cue inference. Provides two steps: `whisperx.align` (drops in
+after `whisper.transcribe`) and `whisperx.transcribe_aligned` (full
+pipeline standalone). GPU-heavy; remote-eligible.
 
 ## Adding a plugin
 
