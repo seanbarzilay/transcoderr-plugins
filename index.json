@@ -19,6 +19,24 @@
       "runtimes": []
     },
     {
+      "name": "subsync",
+      "version": "0.1.0",
+      "summary": "Aligns an out-of-sync .srt to the audio of a video file using ffsubsync (VAD-based).",
+      "tarball_url": "https://raw.githubusercontent.com/seanbarzilay/transcoderr-plugins/main/tarballs/subsync-0.1.0.tar.gz",
+      "tarball_sha256": "dcf3d9833117b8a662e9a69456e4ef1b57c4b8ee7cc35bb28c944f8be6dbf76b",
+      "homepage": "https://github.com/seanbarzilay/transcoderr-plugins/tree/main/subsync",
+      "min_transcoderr_version": "0.27.0",
+      "kind": "subprocess",
+      "provides_steps": [
+        "subsync.align"
+      ],
+      "runtimes": [
+        "python3",
+        "ffmpeg"
+      ],
+      "deps": "python3 -m venv ./venv && ./venv/bin/pip install ffsubsync"
+    },
+    {
       "name": "upscale",
       "version": "0.1.0",
       "summary": "Upscales the video stream with Real-ESRGAN (ncnn-vulkan). Designed for SD-source upgrades.",
