@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
+import time
 from glob import glob
 from pathlib import Path
+from typing import Callable, Optional
 
 # Heartbeat cadence for the dispatcher's inter-frame timer. The
 # transcoderr coordinator drops a remote step that goes 30s without
@@ -186,6 +189,13 @@ def _ffsubsync_binary() -> str:
     return str(Path(__file__).resolve().parent / "venv" / "bin" / "ffsubsync")
 
 
+# tqdm-style progress regex — matches "<digits>%|" anywhere in a line.
+# Fits ffsubsync's default tqdm output (`extracting speech segments:
+# 22%|##  | 12/55 [00:00<00:01, 30.49it/s]`) and survives any prefix
+# tqdm slaps in front of the bar.
+_PROGRESS_RE = re.compile(r"(\d{1,3})%\|")
+
+
 def run_ffsubsync(
     video_path: Path,
     srt_path: Path,
@@ -193,14 +203,24 @@ def run_ffsubsync(
     *,
     max_offset_seconds: float,
     framerate_correction: bool,
+    on_progress: Optional[Callable[[int], None]] = None,
 ) -> tuple[int, str]:
-    """Spawn ffsubsync; return (returncode, captured_stderr).
+    """Spawn ffsubsync; stream stderr; return (returncode, captured_stderr).
 
     The subprocess writes its synced output to `tmp_out_path`; the caller
     is responsible for atomically renaming it over `srt_path` on success.
-    Captures stderr (where ffsubsync logs the computed offset) and
-    discards stdout (which ffsubsync uses for verbose ffmpeg passthrough
-    when run in some modes — we don't need it).
+
+    Stderr is consumed line-by-line so tqdm progress bars stream in real
+    time. Each unique integer percent parsed from a tqdm line is passed
+    to `on_progress(pct)` (when supplied). Repeated identical percents
+    are de-duplicated so the run timeline doesn't get a hundred copies
+    of the same `syncing: 50%` event. The full stderr is still captured
+    and returned so the caller can parse the offset/framerate footer
+    after exit.
+
+    `bufsize=1` + `text=True` makes the iterator yield on \\r as well as
+    \\n, which is exactly how tqdm flushes per-tick updates to a
+    non-tty pipe.
     """
     cmd = [
         _ffsubsync_binary(),
@@ -213,11 +233,13 @@ def run_ffsubsync(
         cmd.append("--no-fix-framerate")
 
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            check=False,
-            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
+            bufsize=1,
         )
     except FileNotFoundError as exc:
         raise ProtocolError(
@@ -225,7 +247,28 @@ def run_ffsubsync(
             f"(plugin install incomplete?)"
         ) from exc
 
-    return result.returncode, result.stderr or ""
+    stderr_lines: list[str] = []
+    last_pct = -1
+    if proc.stderr is not None:
+        for line in proc.stderr:
+            stderr_lines.append(line)
+            if on_progress is None:
+                continue
+            m = _PROGRESS_RE.search(line)
+            if not m:
+                continue
+            pct = int(m.group(1))
+            if not 0 <= pct <= 100 or pct == last_pct:
+                continue
+            last_pct = pct
+            try:
+                on_progress(pct)
+            except Exception:  # noqa: BLE001
+                # A misbehaving callback must never take the run down.
+                pass
+
+    rc = proc.wait()
+    return rc, "".join(stderr_lines)
 
 
 # ---- High-level align orchestration ------------------------------------
@@ -236,6 +279,7 @@ def align_subtitle(
     config: dict,
     *,
     stdout,
+    on_progress: Optional[Callable[[int], None]] = None,
 ) -> dict | None:
     """Run ffsubsync against (video, srt). Apply the result if it's sane.
 
@@ -243,6 +287,9 @@ def align_subtitle(
     None on a benign skip (warning emitted to stdout already).
     Raises ProtocolError on conditions the caller should turn into
     result:error.
+
+    `on_progress(pct)` is forwarded into `run_ffsubsync`; main() uses it
+    to surface live tqdm percentages on the run timeline.
     """
     if not video_path.exists():
         raise ProtocolError(f"video file does not exist: {video_path}")
@@ -262,6 +309,7 @@ def align_subtitle(
         tmp_out,
         max_offset_seconds=max_offset,
         framerate_correction=framerate_correction,
+        on_progress=on_progress,
     )
 
     if rc != 0:
@@ -348,24 +396,40 @@ def main(stdin=None, stdout=None) -> int:
             emit_result_ok(out=stdout)
             return 0
 
-        # Heartbeat keeps the coordinator's 30s inter-frame timer alive
-        # even when ffsubsync sits inside ffmpeg audio extraction. The
-        # lock serialises heartbeat and any other writes so their bytes
-        # can't interleave on stdout.
+        # The lock serialises every stdout write so progress events
+        # and the heartbeat can't interleave bytes. `last_emit` is a
+        # 1-element list used as a thread-shared `monotonic()` snapshot
+        # — the heartbeat reads it to skip ticks when progress events
+        # are already keeping the coordinator's 30s inter-frame timer
+        # alive. (Avoids a flood of redundant `syncing...` lines on the
+        # run timeline when tqdm percent bumps are already streaming.)
         emit_lock = threading.Lock()
         heartbeat_stop = threading.Event()
+        last_emit = [time.monotonic()]
 
-        def _heartbeat():
-            while not heartbeat_stop.wait(HEARTBEAT_INTERVAL_SECS):
-                with emit_lock:
-                    emit_log("syncing...", out=stdout)
-                    stdout.flush()
+        def _emit_log_safe(msg: str) -> None:
+            with emit_lock:
+                emit_log(msg, out=stdout)
+                stdout.flush()
+                last_emit[0] = time.monotonic()
+
+        def _on_progress(pct: int) -> None:
+            _emit_log_safe(f"syncing: {pct}%")
+
+        def _heartbeat() -> None:
+            # Tick every second; only emit when emit-quiet for the
+            # full HEARTBEAT_INTERVAL_SECS window so progress events
+            # crowd out the keep-alive when both are active.
+            while not heartbeat_stop.wait(1.0):
+                if time.monotonic() - last_emit[0] >= HEARTBEAT_INTERVAL_SECS:
+                    _emit_log_safe("syncing...")
 
         threading.Thread(target=_heartbeat, daemon=True).start()
 
         try:
             meta = align_subtitle(
-                video_path, srt_path, parsed["config"], stdout=stdout,
+                video_path, srt_path, parsed["config"],
+                stdout=stdout, on_progress=_on_progress,
             )
         except ProtocolError as exc:
             emit_result_err(str(exc), out=stdout)
