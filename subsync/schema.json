@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "subtitle_path": {
+      "type": "string",
+      "default": "",
+      "description": "Optional override path to the .srt to sync. Templated (supports {{ ... }}). Empty string means auto-discover from ctx.steps."
+    },
+    "max_offset_seconds": {
+      "type": "number",
+      "default": 60,
+      "description": "Refuse to apply offsets above this magnitude. Sanity check; large offsets usually mean ffsubsync misidentified the speech."
+    },
+    "framerate_correction": {
+      "type": "boolean",
+      "default": true,
+      "description": "Allow ffsubsync to also fit a linear scale factor (helps PAL↔NTSC drift)."
+    },
+    "fail_on_no_match": {
+      "type": "boolean",
+      "default": false,
+      "description": "Hard-fail vs. warn-and-pass on alignment failure. Default is warn-and-pass."
+    }
+  }
+}

@@ -22,6 +22,12 @@ step registry — no restart needed.
 │   ├── bin/run
 │   ├── schema.json
 │   └── README.md
+├── subsync/                # Python plugin: re-time .srt to audio via ffsubsync
+│   ├── manifest.toml
+│   ├── bin/run
+│   ├── plugin.py
+│   ├── schema.json
+│   └── README.md
 ├── upscale/                # Python plugin: AI upscaling via Real-ESRGAN (ncnn-vulkan)
 │   ├── manifest.toml
 │   ├── bin/run
@@ -50,19 +56,12 @@ compression ratio, so notify templates can render lines like:
 Pure POSIX shell + `awk` + `wc`. Provides two step names:
 `size.report.before` (run early) and `size.report.after` (run after `output`).
 
-### [`whisper`](whisper/)
+### [`subsync`](subsync/)
 
-Generates a sidecar `<basename>.<lang>.srt` for the post-transcode
-output file using
-[faster-whisper](https://github.com/SYSTRAN/faster-whisper). GPU is
-auto-detected (`float16` on CUDA, `int8` on CPU). Provides one step:
-`whisper.transcribe` (run after `output`).
-
-Declares `runtimes = ["python3", "ffprobe"]` and a `deps` line that
-pip-installs faster-whisper + CUDA libs into the plugin's own directory
-at install + boot. Per-step config lets you pick the model
-(`large-v3-turbo` by default), pin a language, or skip when a sidecar
-already exists.
+Re-times an out-of-sync `.srt` against the audio of a video file using
+[ffsubsync](https://github.com/smacke/ffsubsync) (VAD-based). Designed
+to drop in after `whisper.transcribe` to clean up timing drift in the
+whisper-generated sidecar. Provides one step: `subsync.align`.
 
 ### [`upscale`](upscale/)
 
@@ -76,6 +75,20 @@ Provides one step: `upscale.video` (run after `output`). Declares
 `runtimes = ["python3", "ffmpeg", "ffprobe", "realesrgan-ncnn-vulkan"]`.
 Per-step config lets you pick the model, target height, and gate by
 source resolution.
+
+### [`whisper`](whisper/)
+
+Generates a sidecar `<basename>.<lang>.srt` for the post-transcode
+output file using
+[faster-whisper](https://github.com/SYSTRAN/faster-whisper). GPU is
+auto-detected (`float16` on CUDA, `int8` on CPU). Provides one step:
+`whisper.transcribe` (run after `output`).
+
+Declares `runtimes = ["python3", "ffprobe"]` and a `deps` line that
+pip-installs faster-whisper + CUDA libs into the plugin's own directory
+at install + boot. Per-step config lets you pick the model
+(`large-v3-turbo` by default), pin a language, or skip when a sidecar
+already exists.
 
 ## Adding a plugin
 
