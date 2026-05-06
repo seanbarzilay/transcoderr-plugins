@@ -8,14 +8,19 @@ sidecar.
 
 ## Known limitation: Python version
 
-ffsubsync transitively depends on `webrtcvad` for voice-activity
-detection. As of this writing, `webrtcvad` does not build cleanly on
-Python 3.14 (it imports `pkg_resources` which was removed from the
-3.14 stdlib). The plugin's `deps` line creates the venv using whatever
-`python3` is on `$PATH` — if your transcoderr image ships Python 3.14
-or later, `pip install ffsubsync` will fail at install time. Use a
-container image with Python 3.11 / 3.12 / 3.13 until ffsubsync's
-dependency surface catches up.
+ffsubsync transitively depends on `webrtcvad`, which ships only an
+sdist on PyPI — no wheels. The transcoderr container doesn't include
+gcc, so a naive `pip install ffsubsync` fails at build time with
+`x86_64-linux-gnu-gcc: No such file or directory`. The manifest
+works around this by installing the `webrtcvad-wheels` fork (same
+`import webrtcvad` API, prebuilt binaries) first, then pulling
+ffsubsync with `--no-deps`.
+
+`webrtcvad-wheels` ships wheels for cp310..cp313 on glibc + musl
+linux (x86_64 / aarch64 / ppc64le / i686), macOS (intel + arm64),
+and Windows. Python 3.14 has no wheel yet — operators on 3.14 will
+need to either drop back to 3.13 or `apt install gcc` in the
+container.
 
 ## Flow snippet
 

@@ -1,9 +1,25 @@
 name = "subsync"
-version = "0.1.0"
+version = "0.1.1"
 kind = "subprocess"
 entrypoint = "bin/run"
 provides_steps = ["subsync.align"]
 summary = "Aligns an out-of-sync .srt to the audio of a video file using ffsubsync (VAD-based)."
 min_transcoderr_version = "0.27.0"
 runtimes = ["python3", "ffmpeg"]
-deps = "python3 -m venv ./venv && ./venv/bin/pip install ffsubsync"
+# ffsubsync transitively requires `webrtcvad`, which has no PyPI
+# wheels — only an sdist that needs gcc + Python headers to build
+# from source. The transcoderr container ships neither. The
+# `webrtcvad-wheels` fork ships prebuilt binaries for cp310..cp313
+# across glibc + musl, x86_64 / aarch64 / ppc64le / i686 — same
+# `import webrtcvad` API. Install it first, then pull ffsubsync
+# with `--no-deps` so pip doesn't try to satisfy the original
+# `webrtcvad` requirement from sdist. The remaining ffsubsync
+# transitive deps are listed explicitly because of `--no-deps`.
+deps = """\
+python3 -m venv ./venv && \
+./venv/bin/pip install webrtcvad-wheels && \
+./venv/bin/pip install 'auditok==0.1.5' chardet charset_normalizer \
+  'faust-cchardet;python_version<"3.13"' ffmpeg-python 'numpy>=1.12.0' \
+  'pysubs2>=1.2.0' rich setuptools 'srt>=3.0.0' tqdm typing_extensions && \
+./venv/bin/pip install --no-deps ffsubsync\
+"""
