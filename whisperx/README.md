@@ -28,6 +28,17 @@ faster-whisper transitively via `whisperx`. Total install footprint
 is ~5–7 GB including model weights downloaded on first use. First
 install takes 3–5 minutes.
 
+## Known limitation: GPU architecture
+
+The plugin pins `torch==2.3.1` because torch 2.4+ dropped Pascal
+(sm_61) — Tesla P4, GTX 10-series, and Quadro P-series cards otherwise
+fail at wav2vec2 forward time with `"CUDA error: no kernel image is
+available for execution on the device"`. Volta and newer (sm_70+) work
+on either pin, so the 2.3.1 ceiling is the broadest-compatibility
+choice. If you need a newer torch (e.g., for Hopper-only features) and
+have a sm_70+ GPU, edit the manifest's `deps` line and rebuild the
+plugin venv.
+
 ## Flow snippets
 
 After `whisper.transcribe` (most common):

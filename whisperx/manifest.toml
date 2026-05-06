@@ -1,12 +1,18 @@
 name = "whisperx"
-version = "0.1.0"
+version = "0.1.1"
 kind = "subprocess"
 entrypoint = "bin/run"
 provides_steps = ["whisperx.align", "whisperx.transcribe_aligned"]
 summary = "Forced phoneme alignment for whisper output via WhisperX (wav2vec2-based)."
 min_transcoderr_version = "0.27.0"
 runtimes = ["python3", "ffmpeg"]
-deps = "python3 -m venv ./venv && ./venv/bin/pip install whisperx nvidia-cublas-cu12 'nvidia-cudnn-cu12==9.*'"
+# torch + torchaudio pinned to 2.3.1 (cu121) so the wheels still ship
+# sm_61 (Pascal) kernels — torch 2.4+ dropped Pascal, which leaves
+# Tesla P4 / GTX 10-series / Quadro P-series with "no kernel image
+# available for execution on the device" at wav2vec2 forward time.
+# whisperx pinned to 3.1.6 (compatible with torch 2.3.x; later
+# whisperx releases bump the torch floor past 2.4).
+deps = "python3 -m venv ./venv && ./venv/bin/pip install 'torch==2.3.1' 'torchaudio==2.3.1' && ./venv/bin/pip install 'whisperx==3.1.6' nvidia-cublas-cu12 'nvidia-cudnn-cu12==9.*'"
 
 [steps."whisperx.align"]
 executor = "any-worker"
