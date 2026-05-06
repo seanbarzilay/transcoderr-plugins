@@ -117,6 +117,172 @@ def parse_execute(line: str) -> dict:
     }
 
 
+# ---- Subtitle path resolution (verbatim from subsync/plugin.py) --------
+
+def find_subtitle_path(
+    config: dict,
+    ctx: dict,
+    video_path: Path,
+) -> Path | None:
+    """Resolve which .srt to align. Same logic as subsync — operators
+    expect identical behavior across both plugins."""
+    override = (config.get("subtitle_path") or "").strip()
+    if override:
+        return Path(override)
+
+    steps = ctx.get("steps") or {}
+    if isinstance(steps, dict):
+        for value in steps.values():
+            if isinstance(value, dict):
+                candidate = value.get("subtitle_path")
+                if candidate:
+                    return Path(candidate)
+
+    pattern = str(video_path.with_suffix("")) + ".*.srt"
+    matches = glob(pattern)
+    if not matches:
+        return None
+    matches.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return Path(matches[0])
+
+
+# ---- Language resolution -----------------------------------------------
+
+def resolve_language(
+    config: dict,
+    ctx: dict,
+    srt_path: Path | None,
+    *,
+    stdout=None,
+) -> str:
+    """Resolve the language tag for the wav2vec2 alignment model.
+
+    Priority:
+      1. config["language"] override (non-empty, non-"auto")
+      2. First step in ctx["steps"] with a `language` field set
+      3. Parse from the .srt filename (Movie.en.srt → "en")
+      4. Default "en" with a warning log
+    """
+    override = (config.get("language") or "").strip()
+    if override and override != "auto":
+        return override
+
+    steps = ctx.get("steps") or {}
+    if isinstance(steps, dict):
+        for value in steps.values():
+            if isinstance(value, dict):
+                lang = value.get("language")
+                if lang and isinstance(lang, str) and lang != "auto":
+                    return lang
+
+    if srt_path is not None:
+        # `Movie.en.srt` → split off the .srt → split off the language tag.
+        # `with_suffix("")` strips only the rightmost extension (`.srt`).
+        without_srt = srt_path.with_suffix("")
+        # Now `Movie.en` — the suffix after the last `.` is the language.
+        parts = without_srt.name.rsplit(".", 1)
+        if len(parts) == 2 and 2 <= len(parts[1]) <= 3 and parts[1].isalpha():
+            return parts[1].lower()
+
+    if stdout is not None:
+        emit_log(
+            "could not detect subtitle language; defaulting to 'en'",
+            out=stdout,
+        )
+    return "en"
+
+
+# ---- SRT parsing -------------------------------------------------------
+
+def fmt_ts(secs: float) -> str:
+    """Format seconds as SRT timestamp HH:MM:SS,mmm. Verbatim from whisper."""
+    ms_total = int(round(secs * 1000))
+    h, rem = divmod(ms_total, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    s, ms = divmod(rem, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def parse_srt_ts(s: str) -> float:
+    """Parse `HH:MM:SS,mmm` (or `HH:MM:SS.mmm`) into seconds."""
+    s = s.strip().replace(",", ".")
+    h, m, rest = s.split(":")
+    return int(h) * 3600 + int(m) * 60 + float(rest)
+
+
+def srt_to_segments(srt_text: str) -> list:
+    """Parse SRT text into a list of {start, end, text} dicts (the shape
+    whisperx.align expects as input). Cue numbers are ignored. Multi-line
+    cue text is joined with single spaces."""
+    segments = []
+    blocks = srt_text.replace("\r\n", "\n").strip().split("\n\n")
+    for block in blocks:
+        lines = [ln for ln in block.splitlines() if ln.strip()]
+        if len(lines) < 2:
+            continue
+        # Line 0 is the cue number (ignored); line 1 is the timestamp;
+        # lines 2..N are the text. Some authoring tools omit the cue
+        # number — handle that too.
+        if "-->" in lines[0]:
+            ts_line = lines[0]
+            text_lines = lines[1:]
+        else:
+            ts_line = lines[1]
+            text_lines = lines[2:]
+        if "-->" not in ts_line:
+            continue
+        try:
+            start_str, end_str = ts_line.split("-->")
+            start = parse_srt_ts(start_str)
+            end = parse_srt_ts(end_str)
+        except (ValueError, IndexError):
+            continue
+        text = " ".join(t.strip() for t in text_lines)
+        if not text:
+            continue
+        segments.append({"start": start, "end": end, "text": text})
+    return segments
+
+
+def format_srt_from_aligned(segments: list) -> str:
+    """Format whisperx.align's output (segments with per-word timestamps)
+    as SRT text. Cue start/end are derived from the first/last aligned
+    word; falls back to the segment's own start/end if no words were
+    aligned successfully (rare — happens when a segment's text didn't
+    phonetically match the audio)."""
+    parts = []
+    cue_index = 1
+    for seg in segments:
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        words = seg.get("words") or []
+        timed = [
+            w for w in words
+            if w.get("start") is not None and w.get("end") is not None
+        ]
+        if timed:
+            start = float(timed[0]["start"])
+            end = float(timed[-1]["end"])
+        else:
+            start = float(seg.get("start", 0.0))
+            end = float(seg.get("end", 0.0))
+        parts.append(f"{cue_index}\n{fmt_ts(start)} --> {fmt_ts(end)}\n{text}\n\n")
+        cue_index += 1
+    return "".join(parts)
+
+
+# ---- Atomic in-place replacement (verbatim from subsync) ---------------
+
+def atomic_replace(tmp_path: Path, target_path: Path) -> None:
+    """Move tmp_path over target_path atomically. Raises FileNotFoundError
+    if tmp_path doesn't exist; the caller is responsible for ensuring
+    the tmp file was written before invocation."""
+    if not tmp_path.exists():
+        raise FileNotFoundError(f"tmp output {tmp_path} not found")
+    os.replace(tmp_path, target_path)
+
+
 # ---- Main entrypoint ---------------------------------------------------
 
 def main(stdin=None, stdout=None) -> int:
