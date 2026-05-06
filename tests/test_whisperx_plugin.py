@@ -4,6 +4,8 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -835,3 +837,138 @@ class MainTests(unittest.TestCase):
         events = _read_events(stdout)
         self.assertEqual(events[-1]["status"], "error")
         self.assertIn("unknown step_id", events[-1]["error"]["msg"])
+
+
+def _gpu_available() -> bool:
+    """Lightweight check: torch + CUDA. False on import errors."""
+    try:
+        import torch
+        return bool(torch.cuda.is_available())
+    except ImportError:
+        return False
+
+
+@unittest.skipUnless(
+    _gpu_available() and shutil.which("ffmpeg"),
+    "GPU and ffmpeg required for the smoke test",
+)
+class SmokeTest(unittest.TestCase):
+    """End-to-end round-trip with a synthetic video and a real voice clip.
+
+    Builds a 30-second video by ffmpeg-concatenating 10 seconds of
+    silence, the voice fixture, and 17 more seconds of silence. The
+    pre-canned .srt has the cue at t=5..8 (5 seconds early). Runs
+    whisperx.align via plugin.main(); asserts the cue moves to within
+    +/-0.2s of t=10.
+
+    Tolerance is tighter than subsync's +/-0.5s because forced alignment
+    is significantly more accurate than VAD.
+    """
+
+    FIXTURE_WAV = (
+        Path(__file__).resolve().parents[1]
+        / "tests" / "fixtures" / "whisperx" / "voice.wav"
+    )
+
+    def setUp(self):
+        if not self.FIXTURE_WAV.exists():
+            self.skipTest(f"voice fixture missing: {self.FIXTURE_WAV}")
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.video = self.dir / "Synthetic.mkv"
+        self.srt = self.dir / "Synthetic.en.srt"
+
+        # Build a 30s video with the voice clip injected at t=10s.
+        # Generate: 10s silence | voice (3s) | 17s silence concatenated.
+        cmd = [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", "color=c=black:s=320x240:d=30:r=10",
+            "-f", "lavfi", "-i",
+            "anullsrc=channel_layout=mono:sample_rate=16000",
+            "-i", str(self.FIXTURE_WAV),
+            "-filter_complex",
+            (
+                "[1:a]atrim=duration=10[a1];"
+                "[1:a]atrim=duration=17[a3];"
+                "[a1][2:a][a3]concat=n=3:v=0:a=1[outa]"
+            ),
+            "-map", "0:v", "-map", "[outa]",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30",
+            "-c:a", "aac", "-b:a", "32k",
+            "-shortest",
+            str(self.video),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            self.skipTest(f"ffmpeg fixture build failed: {proc.stderr}")
+
+        # Read the fixture's transcript from a sibling file. Ship a
+        # text file alongside the WAV: tests/fixtures/whisperx/voice.txt
+        # containing the words spoken (e.g. "hello world this is a test").
+        # If absent, fall back to a generic placeholder; the assertion
+        # below tolerates loose text matching.
+        transcript_path = self.FIXTURE_WAV.with_suffix(".txt")
+        if transcript_path.exists():
+            transcript = transcript_path.read_text(encoding="utf-8").strip()
+        else:
+            transcript = "voice content"
+
+        # Subtitle cue at t=5..8 (5 seconds early).
+        self.srt.write_text(
+            "1\n"
+            "00:00:05,000 --> 00:00:08,000\n"
+            f"{transcript}\n\n",
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    @staticmethod
+    def _read_first_cue_start(srt_text: str) -> float:
+        lines = [ln for ln in srt_text.splitlines() if ln.strip()]
+        ts_line = lines[1] if "-->" in lines[0] else lines[1]
+        # Robust pick of the timestamp line.
+        for ln in lines:
+            if "-->" in ln:
+                ts_line = ln
+                break
+        start = ts_line.split("-->")[0].strip().replace(",", ".")
+        h, m, rest = start.split(":")
+        return int(h) * 3600 + int(m) * 60 + float(rest)
+
+    def test_align_realigns_voice_clip_to_audio(self):
+        # No mocks here -- real whisperx.align runs against the real
+        # synthetic video.
+        stdin = io.StringIO()
+        stdin.write('{"event":"init"}\n')
+        stdin.write(json.dumps({
+            "step_id": "whisperx.align",
+            "ctx": {
+                "file": {"path": str(self.video)},
+                "steps": {"transcribe": {"subtitle_path": str(self.srt),
+                                         "language": "en"}},
+            },
+            "config": {},
+        }) + "\n")
+        stdin.seek(0)
+        stdout = io.StringIO()
+        rc = plugin.main(stdin=stdin, stdout=stdout)
+        self.assertEqual(rc, 0,
+                         msg=f"plugin exited non-zero; events: {stdout.getvalue()}")
+        events = _read_events(stdout)
+        self.assertEqual(events[-1]["status"], "ok",
+                         msg=f"final event was not ok: {events[-1]}")
+
+        ctx_set = next((e for e in events if e["event"] == "context_set"), None)
+        self.assertIsNotNone(ctx_set)
+        self.assertGreater(ctx_set["value"]["n_words"], 0,
+                           msg="whisperx aligned zero words; fixture text "
+                           "may not match audio content")
+
+        synced_text = self.srt.read_text(encoding="utf-8")
+        cue_start = self._read_first_cue_start(synced_text)
+        # Voice clip starts at t=10.0; allow +/-0.2s alignment tolerance.
+        self.assertAlmostEqual(cue_start, 10.0, delta=0.2,
+                               msg=f"cue not at ~10s; full srt:\n{synced_text}")
