@@ -39,15 +39,27 @@ choice. If you need a newer torch (e.g., for Hopper-only features) and
 have a sm_70+ GPU, edit the manifest's `deps` line and rebuild the
 plugin venv.
 
-This pin chain has a knock-on effect: `whisperx==3.1.6` (the last
-release whose torch floor is loose enough to coexist with the 2.3.x
-line) hard-pins `pyannote.audio==3.1.1`, and `pyannote.audio==3.1.1`
-calls `torchaudio.set_audio_backend(...)` at import time — an API
-that was removed in torchaudio 2.1. The manifest works around that by
-installing `pyannote.audio==3.3.2` first (the first pyannote release
-that dropped the deprecated call) and then installing whisperx with
-`--no-deps` to bypass its hard pin. If you ever upgrade past torch
-2.3.x, you can drop the `--no-deps` workaround.
+This pin chain has knock-on effects:
+
+- `whisperx==3.1.6` (the last release whose torch floor is loose enough
+  to coexist with the 2.3.x line) hard-pins `pyannote.audio==3.1.1`,
+  and that pyannote release calls `torchaudio.set_audio_backend(...)`
+  at import time — an API removed in torchaudio 2.1. The manifest
+  installs `pyannote.audio==3.3.2` first (the release that dropped
+  the call) and then installs whisperx with `--no-deps` to bypass
+  the hard pin.
+- `faster-whisper==1.0.0` pulls `av>=10` (PyAV). Recent `av` releases
+  drop wheels for some Python/arch combos and fall back to building
+  from source, which fails with `"pkg-config is required for building
+  PyAV"` unless `pkg-config` and the `libav*-dev` headers are present
+  on the host. The manifest pins `av==12.3.0` (broad wheel coverage:
+  cp38..cp312 × linux x86_64/aarch64/i686 + macOS + Windows) and
+  installs with `--only-binary=av` so the install fails fast on
+  unsupported Python versions instead of hanging on a confusing
+  build-from-source error.
+
+If you upgrade past torch 2.3.x, you can drop the `--no-deps`
+workaround and let pip resolve a fresh whisperx + pyannote chain.
 
 ## Flow snippets
 
