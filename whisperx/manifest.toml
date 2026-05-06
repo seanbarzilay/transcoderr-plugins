@@ -1,0 +1,15 @@
+name = "whisperx"
+version = "0.1.0"
+kind = "subprocess"
+entrypoint = "bin/run"
+provides_steps = ["whisperx.align", "whisperx.transcribe_aligned"]
+summary = "Forced phoneme alignment for whisper output via WhisperX (wav2vec2-based)."
+min_transcoderr_version = "0.27.0"
+runtimes = ["python3", "ffmpeg"]
+deps = "python3 -m venv ./venv && ./venv/bin/pip install whisperx nvidia-cublas-cu12 'nvidia-cudnn-cu12==9.*'"
+
+[steps."whisperx.align"]
+executor = "any-worker"
+
+[steps."whisperx.transcribe_aligned"]
+executor = "any-worker"

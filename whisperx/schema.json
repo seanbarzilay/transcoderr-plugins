@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "whisperx step config",
+  "description": "Configuration for whisperx.align and whisperx.transcribe_aligned. The plugin selects the validation branch by step_id at runtime; both shapes are documented here.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "subtitle_path": {
+      "type": "string",
+      "default": "",
+      "description": "(whisperx.align only) Optional override path to the .srt to align. Templated. Empty = auto-discover from ctx.steps.* or glob next to the video."
+    },
+    "language": {
+      "type": "string",
+      "default": "",
+      "description": "Override the language code used to load the wav2vec2 alignment model. Empty = auto-detect from ctx.steps.*.language, then from the .srt filename, defaulting to \"en\". For whisperx.transcribe_aligned, also drives whisper transcription language ('auto' for autodetect)."
+    },
+    "alignment_model": {
+      "type": "string",
+      "default": "",
+      "description": "Override the wav2vec2 alignment model name (HuggingFace ID). Empty = WhisperX picks the bundled model for the language."
+    },
+    "compute_type": {
+      "type": "string",
+      "default": "auto",
+      "description": "(whisperx.transcribe_aligned only) auto | float16 | int8 | float32. 'auto' resolves to float16 on CUDA, int8 on CPU. wav2vec2 alignment precision is fixed by the bundled model wheel; whisperx.align ignores this key."
+    },
+    "batch_size": {
+      "type": "integer",
+      "default": 16,
+      "description": "(whisperx.transcribe_aligned only) Batch size for whisper transcription. whisperx.align does not use this."
+    },
+    "fail_on_no_match": {
+      "type": "boolean",
+      "default": false,
+      "description": "(whisperx.align only) Hard-fail if no .srt is found. Default is benign skip with log."
+    },
+    "model": {
+      "type": "string",
+      "default": "large-v3-turbo",
+      "description": "(whisperx.transcribe_aligned only) faster-whisper model name (e.g. tiny, base, small, medium, large-v3, large-v3-turbo)."
+    },
+    "skip_if_exists": {
+      "type": "boolean",
+      "default": true,
+      "description": "(whisperx.transcribe_aligned only) Skip if a sidecar .srt already exists for this video."
+    }
+  }
+}
