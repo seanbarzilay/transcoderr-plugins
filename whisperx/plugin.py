@@ -92,6 +92,42 @@ def _resolve_device() -> str:
     return "cuda" if _cuda_available() else "cpu"
 
 
+# ---- ffprobe audio detection (verbatim from whisper/plugin.py) ---------
+
+def has_audio_stream(file_path: Path) -> bool:
+    """Return True if ffprobe sees at least one audio stream in file_path."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "a:0",
+                "-show_entries", "stream=index",
+                "-of", "json",
+                str(file_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise ProtocolError("ffprobe not on PATH") from exc
+
+    try:
+        data = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return False
+    return bool(data.get("streams"))
+
+
+# ---- Sidecar discovery -------------------------------------------------
+
+def find_existing_sidecar(video_path: Path) -> Path | None:
+    """Return the first existing `<basename>.<lang>.srt` next to video_path."""
+    pattern = str(video_path.with_suffix("")) + ".*.srt"
+    matches = sorted(glob(pattern))
+    return Path(matches[0]) if matches else None
+
+
 # ---- Event emitters (verbatim copy from whisper/plugin.py) -------------
 
 def emit_log(msg: str, out=None) -> None:
@@ -424,6 +460,114 @@ def align_subtitle(
         "subtitle_path": str(srt_path),
         "language": language,
         "alignment_model": model_label,
+        "n_words": len(word_segments),
+        "duration_sec": round(elapsed, 3),
+    }
+
+
+# ---- whisperx.transcribe_aligned orchestration -------------------------
+
+def transcribe_and_align(
+    video_path: Path,
+    config: dict,
+    *,
+    stdout,
+) -> dict | None:
+    """Run the full whisperx pipeline (transcribe + align) on video_path.
+
+    Returns the metadata dict to pass into context_set on success, or
+    None on a benign skip (no-audio, sidecar-exists). Raises
+    ProtocolError on conditions the caller should turn into result:error.
+    """
+    if not video_path.exists():
+        raise ProtocolError(f"video file does not exist: {video_path}")
+
+    if not has_audio_stream(video_path):
+        emit_log("no audio stream, skipping", out=stdout)
+        return None
+
+    if config.get("skip_if_exists", True):
+        existing = find_existing_sidecar(video_path)
+        if existing is not None:
+            emit_log(f"sidecar already exists at {existing}, skipping", out=stdout)
+            return None
+
+    started = time.monotonic()
+    wx = _load_whisperx()
+    device = _resolve_device()
+    compute_type = _resolve_compute_type(config["compute_type"])
+
+    audio = wx.load_audio(str(video_path))
+
+    # Step 1: transcribe.
+    transcribe_lang = (config.get("language") or "auto").strip()
+    transcribe_kwargs = {"batch_size": int(config.get("batch_size", 16))}
+    if transcribe_lang and transcribe_lang != "auto":
+        transcribe_kwargs["language"] = transcribe_lang
+
+    model = wx.load_model(config["model"], device, compute_type=compute_type)
+    transcribe_result = model.transcribe(audio, **transcribe_kwargs)
+    detected_language = transcribe_result.get("language") or "en"
+    segments_in = transcribe_result.get("segments") or []
+
+    if not segments_in:
+        emit_log("no speech detected, skipping", out=stdout)
+        return None
+
+    # Step 2: align.
+    align_model_override = (config.get("alignment_model") or "").strip() or None
+    try:
+        model_a, metadata = wx.load_align_model(
+            language_code=detected_language,
+            device=device,
+            model_name=align_model_override,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise ProtocolError(
+            f"could not load alignment model for language '{detected_language}': {exc}"
+        ) from exc
+
+    align_result = wx.align(
+        segments_in,
+        model_a,
+        metadata,
+        audio,
+        device,
+        interpolate_method="nearest",
+        return_char_alignments=False,
+        print_progress=False,
+    )
+
+    aligned_segments = align_result.get("segments") or []
+    word_segments = align_result.get("word_segments") or []
+
+    # Step 3: format and write the sidecar.
+    new_srt_text = format_srt_from_aligned(aligned_segments)
+    if not new_srt_text:
+        emit_log(
+            "whisperx produced no aligned segments; nothing to write",
+            out=stdout,
+        )
+        return None
+
+    sidecar = video_path.with_name(f"{video_path.stem}.{detected_language}.srt")
+    tmp_out = sidecar.with_suffix(sidecar.suffix + ".whisperx.tmp.srt")
+    tmp_out.write_text(new_srt_text, encoding="utf-8")
+    atomic_replace(tmp_out, sidecar)
+
+    elapsed = time.monotonic() - started
+    model_label = (
+        align_model_override
+        or metadata.get("type")
+        or "default"
+    )
+
+    return {
+        "subtitle_path": str(sidecar),
+        "language": detected_language,
+        "transcription_model": config["model"],
+        "alignment_model": model_label,
+        "n_segments": len(aligned_segments),
         "n_words": len(word_segments),
         "duration_sec": round(elapsed, 3),
     }

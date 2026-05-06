@@ -491,3 +491,180 @@ class AlignSubtitleTests(unittest.TestCase):
         kwargs = wx.align.call_args.kwargs
         self.assertFalse(kwargs.get("print_progress", True),
                          "print_progress must be False to keep stdout clean")
+
+
+class HasAudioStreamTests(unittest.TestCase):
+    """Verbatim from test_whisper_plugin.py — ffprobe-mocked behavior."""
+
+    @staticmethod
+    def _make_completed(stdout: str):
+        completed = mock.MagicMock()
+        completed.stdout = stdout
+        completed.returncode = 0
+        return completed
+
+    def test_true_when_ffprobe_finds_audio(self):
+        ffprobe_out = json.dumps({"streams": [{"index": 1}]})
+        with mock.patch.object(plugin.subprocess, "run",
+                               return_value=self._make_completed(ffprobe_out)):
+            self.assertTrue(plugin.has_audio_stream(Path("/x")))
+
+    def test_false_when_ffprobe_finds_no_audio(self):
+        ffprobe_out = json.dumps({"streams": []})
+        with mock.patch.object(plugin.subprocess, "run",
+                               return_value=self._make_completed(ffprobe_out)):
+            self.assertFalse(plugin.has_audio_stream(Path("/x")))
+
+    def test_raises_when_ffprobe_not_found(self):
+        with mock.patch.object(plugin.subprocess, "run",
+                               side_effect=FileNotFoundError("ffprobe")):
+            with self.assertRaises(plugin.ProtocolError):
+                plugin.has_audio_stream(Path("/x"))
+
+
+class TranscribeAndAlignTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.video = self.dir / "Movie.mkv"
+        self.video.write_text("v")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _build_mock_whisperx(self):
+        wx = mock.MagicMock()
+        wx.load_audio.return_value = b"audio"
+
+        wm = mock.MagicMock()
+        wm.transcribe.return_value = {
+            "language": "en",
+            "segments": [
+                {"start": 1.0, "end": 2.0, "text": "Hello."},
+                {"start": 3.0, "end": 4.0, "text": "World."},
+            ],
+        }
+        wx.load_model.return_value = wm
+
+        wx.load_align_model.return_value = (
+            mock.MagicMock(),
+            {"language": "en", "type": "torchaudio"},
+        )
+        wx.align.return_value = {
+            "segments": [
+                {
+                    "start": 1.0, "end": 2.0, "text": "Hello.",
+                    "words": [{"start": 1.05, "end": 1.30, "word": "Hello.",
+                               "score": 0.9}],
+                },
+                {
+                    "start": 3.0, "end": 4.0, "text": "World.",
+                    "words": [{"start": 3.10, "end": 3.50, "word": "World.",
+                               "score": 0.85}],
+                },
+            ],
+            "word_segments": [
+                {"start": 1.05, "end": 1.30, "word": "Hello."},
+                {"start": 3.10, "end": 3.50, "word": "World."},
+            ],
+        }
+        return wx
+
+    def test_happy_path_writes_sidecar_and_returns_metadata(self):
+        wx = self._build_mock_whisperx()
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "_cuda_available", return_value=False), \
+             mock.patch.object(plugin, "has_audio_stream", return_value=True):
+            stdout = io.StringIO()
+            meta = plugin.transcribe_and_align(
+                self.video,
+                {**plugin.DEFAULT_TRANSCRIBE_ALIGNED_CONFIG,
+                 "skip_if_exists": False},
+                stdout=stdout,
+            )
+        self.assertIsNotNone(meta)
+        sidecar = self.dir / "Movie.en.srt"
+        self.assertTrue(sidecar.exists())
+        self.assertEqual(meta["subtitle_path"], str(sidecar))
+        self.assertEqual(meta["language"], "en")
+        self.assertEqual(meta["transcription_model"], "large-v3-turbo")
+        self.assertEqual(meta["alignment_model"], "torchaudio")  # fallback path
+        self.assertEqual(meta["n_segments"], 2)
+        self.assertEqual(meta["n_words"], 2)
+
+    def test_skip_if_exists_skips_when_sidecar_present(self):
+        existing = self.dir / "Movie.en.srt"
+        existing.write_text("existing")
+        wx = self._build_mock_whisperx()
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "has_audio_stream", return_value=True):
+            stdout = io.StringIO()
+            meta = plugin.transcribe_and_align(
+                self.video,
+                plugin.DEFAULT_TRANSCRIBE_ALIGNED_CONFIG,
+                stdout=stdout,
+            )
+        self.assertIsNone(meta)
+        self.assertEqual(existing.read_text(), "existing")
+        wx.load_model.assert_not_called()
+
+    def test_no_audio_stream_skips(self):
+        wx = self._build_mock_whisperx()
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "has_audio_stream", return_value=False):
+            stdout = io.StringIO()
+            meta = plugin.transcribe_and_align(
+                self.video,
+                {**plugin.DEFAULT_TRANSCRIBE_ALIGNED_CONFIG,
+                 "skip_if_exists": False},
+                stdout=stdout,
+            )
+        self.assertIsNone(meta)
+        wx.load_model.assert_not_called()
+
+    def test_no_speech_detected_returns_none(self):
+        wx = self._build_mock_whisperx()
+        wx.load_model.return_value.transcribe.return_value = {
+            "language": "en",
+            "segments": [],
+        }
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "_cuda_available", return_value=False), \
+             mock.patch.object(plugin, "has_audio_stream", return_value=True):
+            stdout = io.StringIO()
+            meta = plugin.transcribe_and_align(
+                self.video,
+                {**plugin.DEFAULT_TRANSCRIBE_ALIGNED_CONFIG,
+                 "skip_if_exists": False},
+                stdout=stdout,
+            )
+        self.assertIsNone(meta)
+        wx.load_align_model.assert_not_called()
+
+    def test_language_override_passes_through_to_transcribe(self):
+        wx = self._build_mock_whisperx()
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "_cuda_available", return_value=False), \
+             mock.patch.object(plugin, "has_audio_stream", return_value=True):
+            plugin.transcribe_and_align(
+                self.video,
+                {**plugin.DEFAULT_TRANSCRIBE_ALIGNED_CONFIG,
+                 "skip_if_exists": False, "language": "fr"},
+                stdout=io.StringIO(),
+            )
+        kwargs = wx.load_model.return_value.transcribe.call_args.kwargs
+        self.assertEqual(kwargs.get("language"), "fr")
+
+    def test_print_progress_is_false_in_align_call(self):
+        wx = self._build_mock_whisperx()
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "_cuda_available", return_value=False), \
+             mock.patch.object(plugin, "has_audio_stream", return_value=True):
+            plugin.transcribe_and_align(
+                self.video,
+                {**plugin.DEFAULT_TRANSCRIBE_ALIGNED_CONFIG,
+                 "skip_if_exists": False},
+                stdout=io.StringIO(),
+            )
+        kwargs = wx.align.call_args.kwargs
+        self.assertFalse(kwargs.get("print_progress", True))
