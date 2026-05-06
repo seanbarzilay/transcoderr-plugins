@@ -73,6 +73,25 @@
         "ffprobe"
       ],
       "deps": "python3 -m venv ./venv && ./venv/bin/pip install faster-whisper nvidia-cublas-cu12 'nvidia-cudnn-cu12==9.*'"
+    },
+    {
+      "name": "whisperx",
+      "version": "0.1.0",
+      "summary": "Forced phoneme alignment for whisper output via WhisperX (wav2vec2-based).",
+      "tarball_url": "https://raw.githubusercontent.com/seanbarzilay/transcoderr-plugins/main/tarballs/whisperx-0.1.0.tar.gz",
+      "tarball_sha256": "714535c1939d1c470f80a2de7df8132b12c11beb2a8ca5f7c811135d9277b580",
+      "homepage": "https://github.com/seanbarzilay/transcoderr-plugins/tree/main/whisperx",
+      "min_transcoderr_version": "0.27.0",
+      "kind": "subprocess",
+      "provides_steps": [
+        "whisperx.align",
+        "whisperx.transcribe_aligned"
+      ],
+      "runtimes": [
+        "python3",
+        "ffmpeg"
+      ],
+      "deps": "python3 -m venv ./venv && ./venv/bin/pip install whisperx nvidia-cublas-cu12 'nvidia-cudnn-cu12==9.*'"
     }
   ]
 }
