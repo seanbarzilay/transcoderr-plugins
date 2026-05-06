@@ -1,18 +1,32 @@
 name = "whisperx"
-version = "0.1.1"
+version = "0.1.2"
 kind = "subprocess"
 entrypoint = "bin/run"
 provides_steps = ["whisperx.align", "whisperx.transcribe_aligned"]
 summary = "Forced phoneme alignment for whisper output via WhisperX (wav2vec2-based)."
 min_transcoderr_version = "0.27.0"
 runtimes = ["python3", "ffmpeg"]
-# torch + torchaudio pinned to 2.3.1 (cu121) so the wheels still ship
-# sm_61 (Pascal) kernels — torch 2.4+ dropped Pascal, which leaves
-# Tesla P4 / GTX 10-series / Quadro P-series with "no kernel image
-# available for execution on the device" at wav2vec2 forward time.
-# whisperx pinned to 3.1.6 (compatible with torch 2.3.x; later
-# whisperx releases bump the torch floor past 2.4).
-deps = "python3 -m venv ./venv && ./venv/bin/pip install 'torch==2.3.1' 'torchaudio==2.3.1' && ./venv/bin/pip install 'whisperx==3.1.6' nvidia-cublas-cu12 'nvidia-cudnn-cu12==9.*'"
+# Three-layer pin to keep Pascal (sm_61) GPU support working.
+#
+# 1) torch == 2.3.1 / torchaudio == 2.3.1 — torch 2.4 dropped sm_61, so
+#    Tesla P4 / GTX 10-series / Quadro P-series die with "no kernel image
+#    available for execution on the device" on anything newer.
+# 2) pyannote.audio == 3.3.2 — whisperx 3.1.6 hard-pins
+#    pyannote.audio == 3.1.1, but 3.1.1 calls
+#    `torchaudio.set_audio_backend(...)` at import time, and that API
+#    was removed in torchaudio 2.1. 3.3.2 dropped the call. Installing
+#    pyannote first locks the version; whisperx is then installed with
+#    --no-deps to bypass the hard pin.
+# 3) Newer whisperx (≥3.4) bumps the torch floor past 2.4, so we can't
+#    just upgrade whisperx out of the conflict.
+deps = """\
+python3 -m venv ./venv && \
+./venv/bin/pip install 'torch==2.3.1' 'torchaudio==2.3.1' && \
+./venv/bin/pip install 'pyannote.audio==3.3.2' 'faster-whisper==1.0.0' \
+  'ctranslate2==4.4.0' transformers pandas nltk \
+  nvidia-cublas-cu12 'nvidia-cudnn-cu12==9.*' && \
+./venv/bin/pip install --no-deps 'whisperx==3.1.6'\
+"""
 
 [steps."whisperx.align"]
 executor = "any-worker"

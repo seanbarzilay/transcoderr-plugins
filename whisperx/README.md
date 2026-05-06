@@ -39,6 +39,16 @@ choice. If you need a newer torch (e.g., for Hopper-only features) and
 have a sm_70+ GPU, edit the manifest's `deps` line and rebuild the
 plugin venv.
 
+This pin chain has a knock-on effect: `whisperx==3.1.6` (the last
+release whose torch floor is loose enough to coexist with the 2.3.x
+line) hard-pins `pyannote.audio==3.1.1`, and `pyannote.audio==3.1.1`
+calls `torchaudio.set_audio_backend(...)` at import time — an API
+that was removed in torchaudio 2.1. The manifest works around that by
+installing `pyannote.audio==3.3.2` first (the first pyannote release
+that dropped the deprecated call) and then installing whisperx with
+`--no-deps` to bypass its hard pin. If you ever upgrade past torch
+2.3.x, you can drop the `--no-deps` workaround.
+
 ## Flow snippets
 
 After `whisper.transcribe` (most common):
