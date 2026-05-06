@@ -48,15 +48,13 @@ This pin chain has knock-on effects:
   installs `pyannote.audio==3.3.2` first (the release that dropped
   the call) and then installs whisperx with `--no-deps` to bypass
   the hard pin.
-- `faster-whisper==1.0.0` pulls `av>=10` (PyAV). Recent `av` releases
-  drop wheels for some Python/arch combos and fall back to building
-  from source, which fails with `"pkg-config is required for building
-  PyAV"` unless `pkg-config` and the `libav*-dev` headers are present
-  on the host. The manifest pins `av==12.3.0` (broad wheel coverage:
-  cp38..cp312 × linux x86_64/aarch64/i686 + macOS + Windows) and
-  installs with `--only-binary=av` so the install fails fast on
-  unsupported Python versions instead of hanging on a confusing
-  build-from-source error.
+- `faster-whisper==1.0.0` pulls `av>=10` (PyAV). When no wheel matches
+  the host Python/arch, pip falls back to building from source, which
+  fails with `"pkg-config is required for building PyAV"` unless
+  `pkg-config` and `libav*-dev` are present. The manifest pins
+  `av==13.1.0` — wheels for cp310..cp313 × linux x86_64/aarch64/i686
+  + macOS + Windows. Older av (e.g. 12.x) has no cp313 wheel and
+  triggers the source-build path on Python 3.13 hosts.
 
 If you upgrade past torch 2.3.x, you can drop the `--no-deps`
 workaround and let pip resolve a fresh whisperx + pyannote chain.
