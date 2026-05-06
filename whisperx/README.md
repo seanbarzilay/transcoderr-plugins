@@ -28,36 +28,18 @@ faster-whisper transitively via `whisperx`. Total install footprint
 is ~5–7 GB including model weights downloaded on first use. First
 install takes 3–5 minutes.
 
-## Known limitation: GPU architecture
+## Known limitation: Pascal-era GPUs
 
-The plugin pins `torch==2.3.1` because torch 2.4+ dropped Pascal
-(sm_61) — Tesla P4, GTX 10-series, and Quadro P-series cards otherwise
+Recent `whisperx` releases pull `torch >= 2.5`, which dropped Pascal
+(sm_61). Tesla P4, GTX 10-series, and Quadro P-series cards will
 fail at wav2vec2 forward time with `"CUDA error: no kernel image is
-available for execution on the device"`. Volta and newer (sm_70+) work
-on either pin, so the 2.3.1 ceiling is the broadest-compatibility
-choice. If you need a newer torch (e.g., for Hopper-only features) and
-have a sm_70+ GPU, edit the manifest's `deps` line and rebuild the
-plugin venv.
-
-This pin chain has knock-on effects:
-
-- `whisperx==3.1.6` (the last release whose torch floor is loose enough
-  to coexist with the 2.3.x line) hard-pins `pyannote.audio==3.1.1`,
-  and that pyannote release calls `torchaudio.set_audio_backend(...)`
-  at import time — an API removed in torchaudio 2.1. The manifest
-  installs `pyannote.audio==3.3.2` first (the release that dropped
-  the call) and then installs whisperx with `--no-deps` to bypass
-  the hard pin.
-- `faster-whisper==1.0.0` pulls `av>=10` (PyAV). When no wheel matches
-  the host Python/arch, pip falls back to building from source, which
-  fails with `"pkg-config is required for building PyAV"` unless
-  `pkg-config` and `libav*-dev` are present. The manifest pins
-  `av==13.1.0` — wheels for cp310..cp313 × linux x86_64/aarch64/i686
-  + macOS + Windows. Older av (e.g. 12.x) has no cp313 wheel and
-  triggers the source-build path on Python 3.13 hosts.
-
-If you upgrade past torch 2.3.x, you can drop the `--no-deps`
-workaround and let pip resolve a fresh whisperx + pyannote chain.
+available for execution on the device"`. Run on an sm_70+ GPU
+(Volta and newer), or edit the manifest's `deps` line locally to
+pin `torch==2.3.1` + `pyannote.audio==3.3.2` + `whisperx==3.1.6`
+with `--no-deps` and rebuild the plugin venv. The pinned chain works
+but has enough sharp edges (pyannote.audio's `set_audio_backend`
+removal, av wheel coverage by Python version) that the upstream
+manifest sticks with the unpinned default.
 
 ## Flow snippets
 
