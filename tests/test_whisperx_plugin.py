@@ -25,9 +25,13 @@ class ImportSmokeTests(unittest.TestCase):
     def test_module_imports(self):
         self.assertTrue(hasattr(plugin, "DEFAULT_ALIGN_CONFIG"))
         self.assertTrue(hasattr(plugin, "DEFAULT_TRANSCRIBE_ALIGNED_CONFIG"))
-        self.assertEqual(plugin.DEFAULT_ALIGN_CONFIG["compute_type"], "auto")
+        self.assertEqual(plugin.DEFAULT_ALIGN_CONFIG["fail_on_no_match"], False)
+        self.assertEqual(plugin.DEFAULT_TRANSCRIBE_ALIGNED_CONFIG["compute_type"], "auto")
         self.assertEqual(plugin.DEFAULT_TRANSCRIBE_ALIGNED_CONFIG["model"], "large-v3-turbo")
         self.assertEqual(plugin.HEARTBEAT_INTERVAL_SECS, 10.0)
+        # compute_type is intentionally not in DEFAULT_ALIGN_CONFIG:
+        # wav2vec2 alignment precision is fixed by the model wheel.
+        self.assertNotIn("compute_type", plugin.DEFAULT_ALIGN_CONFIG)
 
 
 class ProtocolSkeletonTests(unittest.TestCase):

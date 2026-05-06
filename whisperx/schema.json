@@ -23,7 +23,7 @@
     "compute_type": {
       "type": "string",
       "default": "auto",
-      "description": "auto | float16 | int8 | float32. 'auto' resolves to float16 on CUDA, int8 on CPU."
+      "description": "(whisperx.transcribe_aligned only) auto | float16 | int8 | float32. 'auto' resolves to float16 on CUDA, int8 on CPU. wav2vec2 alignment precision is fixed by the bundled model wheel; whisperx.align ignores this key."
     },
     "batch_size": {
       "type": "integer",

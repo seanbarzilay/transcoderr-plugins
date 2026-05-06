@@ -30,7 +30,6 @@ DEFAULT_ALIGN_CONFIG = {
     "subtitle_path": "",
     "language": "",
     "alignment_model": "",
-    "compute_type": "auto",
     "fail_on_no_match": False,
 }
 

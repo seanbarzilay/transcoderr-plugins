@@ -62,7 +62,6 @@ Standalone (replaces `whisper.transcribe`):
     subtitle_path: ""           # Templated override; empty = auto-discover.
     language: ""                # Override; empty = ctx.steps walk → filename → "en".
     alignment_model: ""         # Override wav2vec2 model name (HuggingFace ID).
-    compute_type: "auto"        # auto | float16 | int8 | float32
     fail_on_no_match: false     # Hard-fail vs. warn-and-pass when no .srt found.
 ```
 
