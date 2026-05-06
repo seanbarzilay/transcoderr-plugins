@@ -1,0 +1,39 @@
+#!/bin/sh
+# whisperx plugin entrypoint. Execs the per-plugin venv's interpreter
+# (created by manifest's `deps` line at install + boot).
+#
+# wav2vec2 / torch dlopen()s libcublas.so.12 + libcudnn.so.9 at import
+# time. The pip wheels (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`) drop
+# those .so files into
+# `<venv>/lib/python3.X/site-packages/nvidia/{cublas,cudnn}/lib/`, but
+# that path is NOT on the dynamic loader's search list — so import
+# fails with `Library libcublas.so.12 is not found or cannot be loaded`
+# on hosts that have CUDA available.
+#
+# The dynamic linker reads $LD_LIBRARY_PATH at process start and never
+# again, so setting it from inside Python is too late. Discover the
+# wheel-bundled lib dirs via the venv's interpreter, then exec python
+# with the env var set.
+set -eu
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+PY="$HERE/venv/bin/python3"
+
+NVIDIA_LIBS=$("$PY" - <<'PYEOF' 2>/dev/null
+import os
+import site
+
+dirs = []
+for sp in site.getsitepackages():
+    for pkg in ("cublas", "cudnn"):
+        d = os.path.join(sp, "nvidia", pkg, "lib")
+        if os.path.isdir(d):
+            dirs.append(d)
+print(":".join(dirs))
+PYEOF
+)
+
+if [ -n "${NVIDIA_LIBS:-}" ]; then
+    export LD_LIBRARY_PATH="${NVIDIA_LIBS}:${LD_LIBRARY_PATH:-}"
+fi
+
+exec "$PY" "$HERE/plugin.py"
