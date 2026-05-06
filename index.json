@@ -76,10 +76,10 @@
     },
     {
       "name": "whisperx",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "summary": "Forced phoneme alignment for whisper output via WhisperX (wav2vec2-based).",
-      "tarball_url": "https://raw.githubusercontent.com/seanbarzilay/transcoderr-plugins/main/tarballs/whisperx-0.1.4.tar.gz",
-      "tarball_sha256": "cc24816b771ac6a5f286b0d3a7fc5b5013be8b8f3c5b752fe4948060feb414b6",
+      "tarball_url": "https://raw.githubusercontent.com/seanbarzilay/transcoderr-plugins/main/tarballs/whisperx-0.1.5.tar.gz",
+      "tarball_sha256": "9b34a0bb38891d81cbf5520e4360cf28d730eb27597097f51226d03ec87b4b09",
       "homepage": "https://github.com/seanbarzilay/transcoderr-plugins/tree/main/whisperx",
       "min_transcoderr_version": "0.27.0",
       "kind": "subprocess",
@@ -91,7 +91,7 @@
         "python3",
         "ffmpeg"
       ],
-      "deps": "python3 -m venv ./venv && ./venv/bin/pip install 'torch==2.3.1' 'torchaudio==2.3.1' && ./venv/bin/pip install 'av==13.1.0' && ./venv/bin/pip install 'pyannote.audio==3.3.2' 'faster-whisper==1.0.0' 'ctranslate2==4.4.0' transformers pandas nltk nvidia-cublas-cu12 'nvidia-cudnn-cu12==9.*' && ./venv/bin/pip install --no-deps 'whisperx==3.1.6'"
+      "deps": "python3 -m venv ./venv && ./venv/bin/pip install whisperx nvidia-cublas-cu12 'nvidia-cudnn-cu12==9.*'"
     }
   ]
 }
