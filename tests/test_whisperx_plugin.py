@@ -244,6 +244,12 @@ class SrtToSegmentsTests(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["text"], "Real.")
 
+    def test_handles_crlf_line_endings(self):
+        srt = "1\r\n00:00:01,000 --> 00:00:02,000\r\nHi.\r\n\r\n"
+        out = plugin.srt_to_segments(srt)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["text"], "Hi.")
+
 
 class FormatSrtFromAlignedTests(unittest.TestCase):
     def test_uses_first_and_last_word_timestamps(self):
