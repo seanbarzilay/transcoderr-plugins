@@ -50,6 +50,48 @@ class ProtocolError(Exception):
     """Raised when the JSON-RPC execute message is missing required fields."""
 
 
+# ---- WhisperX import (lazy, so tests can mock at the boundary) ---------
+
+# whisperx is heavy (~3GB transitive: torch + transformers + faster-whisper).
+# Indirected through a getter so unit tests can replace plugin._load_whisperx
+# return value with a MagicMock before the module is loaded for real.
+
+whisperx = None  # type: ignore[assignment]
+
+
+def _load_whisperx():
+    """Import whisperx lazily and cache the module. Indirected for testability."""
+    global whisperx
+    if whisperx is None:
+        import whisperx as _wx  # noqa: WPS433 (lazy import)
+        whisperx = _wx
+    return whisperx
+
+
+def _cuda_available() -> bool:
+    """Return True if a CUDA device looks usable. Indirected so tests can monkeypatch."""
+    try:
+        import torch  # type: ignore
+    except ImportError:
+        return False
+    try:
+        return bool(torch.cuda.is_available())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _resolve_compute_type(user_value: str) -> str:
+    """Resolve 'auto' to float16 (GPU) or int8 (CPU); pass others through."""
+    if user_value != "auto":
+        return user_value
+    return "float16" if _cuda_available() else "int8"
+
+
+def _resolve_device() -> str:
+    """Resolve the torch device string. 'cuda' if available, else 'cpu'."""
+    return "cuda" if _cuda_available() else "cpu"
+
+
 # ---- Event emitters (verbatim copy from whisper/plugin.py) -------------
 
 def emit_log(msg: str, out=None) -> None:
@@ -281,6 +323,110 @@ def atomic_replace(tmp_path: Path, target_path: Path) -> None:
     if not tmp_path.exists():
         raise FileNotFoundError(f"tmp output {tmp_path} not found")
     os.replace(tmp_path, target_path)
+
+
+# ---- whisperx.align orchestration --------------------------------------
+
+def align_subtitle(
+    video_path: Path,
+    srt_path: Path,
+    language: str,
+    config: dict,
+    *,
+    stdout,
+) -> dict | None:
+    """Run wav2vec2 forced alignment against (video, srt). Apply the result.
+
+    Returns the metadata dict to pass into context_set on success, or
+    None on a benign skip. Raises ProtocolError on conditions the
+    caller should turn into result:error.
+    """
+    if not video_path.exists():
+        raise ProtocolError(f"video file does not exist: {video_path}")
+    if not srt_path.exists():
+        emit_log(f"subtitle file does not exist: {srt_path}, skipping", out=stdout)
+        return None
+
+    # Parse the existing srt into the dict shape whisperx.align expects.
+    srt_text = srt_path.read_text(encoding="utf-8")
+    segments_in = srt_to_segments(srt_text)
+    if not segments_in:
+        emit_log(f"subtitle file has no parseable cues: {srt_path}, skipping", out=stdout)
+        return None
+
+    started = time.monotonic()
+    wx = _load_whisperx()
+    device = _resolve_device()
+
+    # Load audio (whisperx.load_audio invokes ffmpeg internally).
+    try:
+        audio = wx.load_audio(str(video_path))
+    except FileNotFoundError as exc:
+        raise ProtocolError(f"ffmpeg not on PATH (or video unreadable): {exc}") from exc
+
+    # Load alignment model. Override model_name if config requests it.
+    align_model_override = (config.get("alignment_model") or "").strip() or None
+    try:
+        model_a, metadata = wx.load_align_model(
+            language_code=language,
+            device=device,
+            model_name=align_model_override,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # whisperx raises ValueError or KeyError when the language isn't
+        # in its model registry. Surface as a ProtocolError mentioning
+        # the language and "alignment model" so the operator can debug.
+        raise ProtocolError(
+            f"could not load alignment model for language '{language}': {exc}"
+        ) from exc
+
+    # Run forced alignment. print_progress=False because whisperx logs
+    # to stdout (would corrupt our JSON-RPC stream).
+    result = wx.align(
+        segments_in,
+        model_a,
+        metadata,
+        audio,
+        device,
+        interpolate_method="nearest",
+        return_char_alignments=False,
+        print_progress=False,
+    )
+
+    aligned_segments = result.get("segments") or []
+    word_segments = result.get("word_segments") or []
+
+    # Format aligned cues back to SRT and atomically swap into place.
+    new_srt_text = format_srt_from_aligned(aligned_segments)
+    if not new_srt_text:
+        emit_log(
+            "whisperx.align produced no aligned segments; leaving original srt",
+            out=stdout,
+        )
+        return None
+
+    tmp_out = srt_path.with_suffix(srt_path.suffix + ".whisperx.tmp.srt")
+    tmp_out.write_text(new_srt_text, encoding="utf-8")
+    atomic_replace(tmp_out, srt_path)
+
+    elapsed = time.monotonic() - started
+
+    # Resolve a label for the alignment model used. metadata returned
+    # by load_align_model has a "type" field (e.g. "torchaudio"); fall
+    # back to the override or "default".
+    model_label = (
+        align_model_override
+        or metadata.get("type")
+        or "default"
+    )
+
+    return {
+        "subtitle_path": str(srt_path),
+        "language": language,
+        "alignment_model": model_label,
+        "n_words": len(word_segments),
+        "duration_sec": round(elapsed, 3),
+    }
 
 
 # ---- Main entrypoint ---------------------------------------------------

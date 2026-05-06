@@ -324,3 +324,170 @@ class AtomicReplaceTests(unittest.TestCase):
         tmp = self.dir / "missing.tmp.srt"
         with self.assertRaises(FileNotFoundError):
             plugin.atomic_replace(tmp, target)
+
+
+class AlignSubtitleTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.video = self.dir / "Movie.mkv"
+        self.video.write_text("v")
+        self.srt = self.dir / "Movie.en.srt"
+        self.srt.write_text(
+            "1\n00:00:01,000 --> 00:00:02,000\nHello.\n\n"
+            "2\n00:00:03,000 --> 00:00:04,000\nWorld.\n\n"
+        )
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _build_mock_whisperx(self, aligned_segments=None, word_segments=None):
+        """Return a MagicMock substitute for the whisperx module."""
+        wx = mock.MagicMock()
+        wx.load_audio.return_value = b"audio"
+        wx.load_align_model.return_value = (
+            mock.MagicMock(),
+            {"language": "en", "type": "torchaudio"},
+        )
+        wx.align.return_value = {
+            "segments": aligned_segments if aligned_segments is not None else [
+                {
+                    "start": 1.0, "end": 2.0, "text": "Hello.",
+                    "words": [
+                        {"start": 1.05, "end": 1.20, "word": "Hello.",
+                         "score": 0.9},
+                    ],
+                },
+                {
+                    "start": 3.0, "end": 4.0, "text": "World.",
+                    "words": [
+                        {"start": 3.10, "end": 3.40, "word": "World.",
+                         "score": 0.85},
+                    ],
+                },
+            ],
+            "word_segments": word_segments if word_segments is not None else [
+                {"start": 1.05, "end": 1.20, "word": "Hello."},
+                {"start": 3.10, "end": 3.40, "word": "World."},
+            ],
+        }
+        return wx
+
+    def test_happy_path_replaces_srt_and_returns_metadata(self):
+        wx = self._build_mock_whisperx()
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "_cuda_available", return_value=False):
+            stdout = io.StringIO()
+            meta = plugin.align_subtitle(
+                self.video, self.srt, "en",
+                {"alignment_model": "", "compute_type": "auto"},
+                stdout=stdout,
+            )
+        self.assertIsNotNone(meta)
+        self.assertEqual(meta["subtitle_path"], str(self.srt))
+        self.assertEqual(meta["language"], "en")
+        self.assertEqual(meta["n_words"], 2)
+        # The replaced SRT should have aligned timestamps from the words,
+        # not the original 01.000 → 02.000.
+        new_srt = self.srt.read_text()
+        self.assertIn("00:00:01,050 --> 00:00:01,200", new_srt)
+
+    def test_alignment_model_override_passes_through(self):
+        wx = self._build_mock_whisperx()
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "_cuda_available", return_value=False):
+            plugin.align_subtitle(
+                self.video, self.srt, "pt",
+                {"alignment_model": "jonatasgrosman/wav2vec2-large-xlsr-53-portuguese",
+                 "compute_type": "auto"},
+                stdout=io.StringIO(),
+            )
+        kwargs = wx.load_align_model.call_args.kwargs
+        self.assertEqual(kwargs["language_code"], "pt")
+        self.assertEqual(kwargs["model_name"],
+                         "jonatasgrosman/wav2vec2-large-xlsr-53-portuguese")
+
+    def test_unsupported_language_raises_protocolerror(self):
+        wx = self._build_mock_whisperx()
+        wx.load_align_model.side_effect = ValueError(
+            "no default align-model for language 'zz'"
+        )
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "_cuda_available", return_value=False):
+            with self.assertRaises(plugin.ProtocolError) as ctx:
+                plugin.align_subtitle(
+                    self.video, self.srt, "zz",
+                    {"alignment_model": "", "compute_type": "auto"},
+                    stdout=io.StringIO(),
+                )
+            self.assertIn("zz", str(ctx.exception))
+            self.assertIn("alignment model", str(ctx.exception).lower())
+
+    def test_empty_aligned_output_passes_through(self):
+        wx = self._build_mock_whisperx(aligned_segments=[], word_segments=[])
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "_cuda_available", return_value=False):
+            stdout = io.StringIO()
+            meta = plugin.align_subtitle(
+                self.video, self.srt, "en",
+                {"alignment_model": "", "compute_type": "auto"},
+                stdout=stdout,
+            )
+        self.assertIsNone(meta)
+        # Original srt content preserved.
+        self.assertIn("Hello.", self.srt.read_text())
+
+    def test_missing_video_raises_protocolerror(self):
+        self.video.unlink()
+        wx = self._build_mock_whisperx()
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "_cuda_available", return_value=False):
+            with self.assertRaises(plugin.ProtocolError) as ctx:
+                plugin.align_subtitle(
+                    self.video, self.srt, "en",
+                    {"alignment_model": "", "compute_type": "auto"},
+                    stdout=io.StringIO(),
+                )
+            self.assertIn("video", str(ctx.exception).lower())
+
+    def test_missing_srt_is_benign_skip(self):
+        self.srt.unlink()
+        wx = self._build_mock_whisperx()
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "_cuda_available", return_value=False):
+            meta = plugin.align_subtitle(
+                self.video, self.srt, "en",
+                {"alignment_model": "", "compute_type": "auto"},
+                stdout=io.StringIO(),
+            )
+        self.assertIsNone(meta)
+
+    def test_unparseable_srt_is_benign_skip(self):
+        self.srt.write_text("not an srt at all\n\nrandom text\n")
+        wx = self._build_mock_whisperx()
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "_cuda_available", return_value=False):
+            stdout = io.StringIO()
+            meta = plugin.align_subtitle(
+                self.video, self.srt, "en",
+                {"alignment_model": "", "compute_type": "auto"},
+                stdout=stdout,
+            )
+        self.assertIsNone(meta)
+        events = _read_events(stdout)
+        self.assertTrue(any("no parseable cues" in e.get("msg", "") for e in events))
+
+    def test_print_progress_is_false_in_align_call(self):
+        # Critical: whisperx.align defaults print_progress=True, which
+        # would corrupt our JSON-RPC stream. Verify we override.
+        wx = self._build_mock_whisperx()
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "_cuda_available", return_value=False):
+            plugin.align_subtitle(
+                self.video, self.srt, "en",
+                {"alignment_model": "", "compute_type": "auto"},
+                stdout=io.StringIO(),
+            )
+        kwargs = wx.align.call_args.kwargs
+        self.assertFalse(kwargs.get("print_progress", True),
+                         "print_progress must be False to keep stdout clean")
