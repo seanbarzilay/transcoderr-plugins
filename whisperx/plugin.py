@@ -596,12 +596,70 @@ def main(stdin=None, stdout=None) -> int:
             emit_result_err(str(exc), out=stdout)
             return 0
 
-        if parsed["step_id"] not in ("whisperx.align", "whisperx.transcribe_aligned"):
-            emit_result_err(f"unknown step_id: {parsed['step_id']}", out=stdout)
+        step_id = parsed["step_id"]
+        if step_id not in ("whisperx.align", "whisperx.transcribe_aligned"):
+            emit_result_err(f"unknown step_id: {step_id}", out=stdout)
             return 0
 
-        # TODO(Task 5): real behavior. For Task 1 the plugin is a no-op
-        # that just acknowledges the protocol.
+        video_path = Path(parsed["file_path"])
+        config = parsed["config"]
+        ctx = parsed["ctx"]
+
+        # For whisperx.align we need to resolve subtitle + language up
+        # front so a no-srt-found case can short-circuit before spawning
+        # the heartbeat (matches subsync's pattern).
+        if step_id == "whisperx.align":
+            srt_path = find_subtitle_path(config, ctx, video_path)
+            if srt_path is None:
+                if config.get("fail_on_no_match"):
+                    emit_result_err(
+                        "whisperx.align: no .srt found and fail_on_no_match=true",
+                        out=stdout,
+                    )
+                    return 0
+                emit_log(
+                    "no subtitle file found to align, skipping",
+                    out=stdout,
+                )
+                emit_result_ok(out=stdout)
+                return 0
+            language = resolve_language(config, ctx, srt_path, stdout=stdout)
+        else:
+            srt_path = None
+            language = None  # transcribe_and_align resolves it from whisper
+
+        # Heartbeat keeps the coordinator's 30s inter-frame timer alive
+        # even when wav2vec2 / whisper sit inside long forward passes.
+        # The lock serialises heartbeat and any other writes so their
+        # bytes can't interleave on stdout.
+        emit_lock = threading.Lock()
+        heartbeat_stop = threading.Event()
+
+        def _heartbeat():
+            while not heartbeat_stop.wait(HEARTBEAT_INTERVAL_SECS):
+                with emit_lock:
+                    emit_log("aligning...", out=stdout)
+                    stdout.flush()
+
+        threading.Thread(target=_heartbeat, daemon=True).start()
+
+        try:
+            if step_id == "whisperx.align":
+                meta = align_subtitle(
+                    video_path, srt_path, language, config, stdout=stdout,
+                )
+            else:
+                meta = transcribe_and_align(
+                    video_path, config, stdout=stdout,
+                )
+        except ProtocolError as exc:
+            emit_result_err(str(exc), out=stdout)
+            return 0
+        finally:
+            heartbeat_stop.set()
+
+        if meta is not None:
+            emit_context_set("whisperx", meta, out=stdout)
         emit_result_ok(out=stdout)
         return 0
     except Exception as exc:  # noqa: BLE001 — last-resort guard

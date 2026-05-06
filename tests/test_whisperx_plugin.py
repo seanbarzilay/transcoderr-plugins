@@ -81,7 +81,8 @@ class ProtocolSkeletonTests(unittest.TestCase):
         }) + "\n")
         stdin.seek(0)
         stdout = io.StringIO()
-        rc = plugin.main(stdin=stdin, stdout=stdout)
+        with mock.patch.object(plugin, "transcribe_and_align", return_value=None):
+            rc = plugin.main(stdin=stdin, stdout=stdout)
         self.assertEqual(rc, 0)
         events = _read_events(stdout)
         self.assertEqual(events[-1], {"event": "result", "status": "ok", "outputs": {}})
@@ -668,3 +669,169 @@ class TranscribeAndAlignTests(unittest.TestCase):
             )
         kwargs = wx.align.call_args.kwargs
         self.assertFalse(kwargs.get("print_progress", True))
+
+
+class MainTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.video = self.dir / "Movie.mkv"
+        self.video.write_text("v")
+        self.srt = self.dir / "Movie.en.srt"
+        # Note: srt is NOT created in setUp; tests that need it create
+        # it explicitly so the no-subtitle-found case can fire.
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _build_stdin(self, *, step_id, file_path=None, config=None, ctx_steps=None):
+        ctx = {"file": {"path": str(file_path or self.video)}}
+        if ctx_steps is not None:
+            ctx["steps"] = ctx_steps
+        stdin = io.StringIO()
+        stdin.write('{"event":"init"}\n')
+        stdin.write(json.dumps({
+            "step_id": step_id,
+            "ctx": ctx,
+            "config": config or {},
+        }) + "\n")
+        stdin.seek(0)
+        return stdin
+
+    def _build_mock_whisperx_for_align(self):
+        wx = mock.MagicMock()
+        wx.load_audio.return_value = b"audio"
+        wx.load_align_model.return_value = (
+            mock.MagicMock(),
+            {"language": "en", "type": "torchaudio"},
+        )
+        wx.align.return_value = {
+            "segments": [{
+                "start": 1.0, "end": 2.0, "text": "Hello.",
+                "words": [{"start": 1.05, "end": 1.20, "word": "Hello.",
+                           "score": 0.9}],
+            }],
+            "word_segments": [
+                {"start": 1.05, "end": 1.20, "word": "Hello."}
+            ],
+        }
+        return wx
+
+    def test_align_happy_path_emits_context_set_and_replaces_srt(self):
+        self.srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello.\n\n")
+        ctx_steps = {"transcribe": {"subtitle_path": str(self.srt),
+                                    "language": "en"}}
+        wx = self._build_mock_whisperx_for_align()
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "_cuda_available", return_value=False):
+            stdout = io.StringIO()
+            rc = plugin.main(
+                stdin=self._build_stdin(
+                    step_id="whisperx.align",
+                    ctx_steps=ctx_steps,
+                ),
+                stdout=stdout,
+            )
+        self.assertEqual(rc, 0)
+        events = _read_events(stdout)
+        ctx_set = next((e for e in events if e["event"] == "context_set"), None)
+        self.assertIsNotNone(ctx_set)
+        self.assertEqual(ctx_set["key"], "whisperx")
+        self.assertEqual(ctx_set["value"]["language"], "en")
+        self.assertEqual(events[-1]["status"], "ok")
+
+    def test_align_no_subtitle_found_skips_with_log_and_ok(self):
+        # No ctx steps, no glob match — the .srt was never written.
+        wx = self._build_mock_whisperx_for_align()
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "_cuda_available", return_value=False):
+            stdout = io.StringIO()
+            rc = plugin.main(
+                stdin=self._build_stdin(step_id="whisperx.align"),
+                stdout=stdout,
+            )
+        self.assertEqual(rc, 0)
+        events = _read_events(stdout)
+        kinds = [e["event"] for e in events]
+        self.assertNotIn("context_set", kinds)
+        self.assertEqual(events[-1]["status"], "ok")
+        wx.load_align_model.assert_not_called()
+
+    def test_align_fail_on_no_match_emits_error(self):
+        wx = self._build_mock_whisperx_for_align()
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "_cuda_available", return_value=False):
+            stdout = io.StringIO()
+            rc = plugin.main(
+                stdin=self._build_stdin(
+                    step_id="whisperx.align",
+                    config={"fail_on_no_match": True},
+                ),
+                stdout=stdout,
+            )
+        self.assertEqual(rc, 0)
+        events = _read_events(stdout)
+        self.assertEqual(events[-1]["status"], "error")
+        self.assertIn("fail_on_no_match", events[-1]["error"]["msg"])
+
+    def test_transcribe_aligned_happy_path_writes_sidecar(self):
+        wx = self._build_mock_whisperx_for_align()
+        wm = mock.MagicMock()
+        wm.transcribe.return_value = {
+            "language": "en",
+            "segments": [{"start": 1.0, "end": 2.0, "text": "Hello."}],
+        }
+        wx.load_model.return_value = wm
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "_cuda_available", return_value=False), \
+             mock.patch.object(plugin, "has_audio_stream", return_value=True):
+            stdout = io.StringIO()
+            rc = plugin.main(
+                stdin=self._build_stdin(
+                    step_id="whisperx.transcribe_aligned",
+                    config={"skip_if_exists": False},
+                ),
+                stdout=stdout,
+            )
+        self.assertEqual(rc, 0)
+        events = _read_events(stdout)
+        ctx_set = next((e for e in events if e["event"] == "context_set"), None)
+        self.assertIsNotNone(ctx_set)
+        sidecar = self.dir / "Movie.en.srt"
+        self.assertTrue(sidecar.exists())
+
+    def test_video_missing_returns_error(self):
+        self.srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello.\n\n")
+        self.video.unlink()
+        ctx_steps = {"transcribe": {"subtitle_path": str(self.srt),
+                                    "language": "en"}}
+        wx = self._build_mock_whisperx_for_align()
+        with mock.patch.object(plugin, "_load_whisperx", return_value=wx), \
+             mock.patch.object(plugin, "_cuda_available", return_value=False):
+            stdout = io.StringIO()
+            rc = plugin.main(
+                stdin=self._build_stdin(
+                    step_id="whisperx.align",
+                    ctx_steps=ctx_steps,
+                ),
+                stdout=stdout,
+            )
+        self.assertEqual(rc, 0)
+        events = _read_events(stdout)
+        self.assertEqual(events[-1]["status"], "error")
+        self.assertIn("video", events[-1]["error"]["msg"].lower())
+
+    def test_unknown_step_id_returns_error(self):
+        stdin = io.StringIO()
+        stdin.write('{"event":"init"}\n')
+        stdin.write(json.dumps({
+            "step_id": "whisperx.bogus",
+            "ctx": {"file": {"path": str(self.video)}},
+        }) + "\n")
+        stdin.seek(0)
+        stdout = io.StringIO()
+        rc = plugin.main(stdin=stdin, stdout=stdout)
+        self.assertEqual(rc, 0)
+        events = _read_events(stdout)
+        self.assertEqual(events[-1]["status"], "error")
+        self.assertIn("unknown step_id", events[-1]["error"]["msg"])
