@@ -93,6 +93,13 @@ more than 10 seconds (e.g. ffsubsync is inside ffmpeg audio
 extraction with no progress reporting), a fallback `syncing...`
 heartbeat keeps the dispatcher's 30 s inter-frame timer alive.
 
+ffsubsync's stderr is consumed via a **pty** rather than a plain
+pipe. `tqdm` auto-disables on non-tty stderr in some configurations
+and relies on `\r` flushes that don't propagate through libc /
+TextIOWrapper line-buffering on a pipe. Spawning under a pty makes
+tqdm think it's writing to a terminal — progress is emitted, and
+each tick reaches the parent in real time.
+
 ## Runtime requirements
 
 - `python3` (the per-plugin venv installs ffsubsync via pip)

@@ -217,46 +217,82 @@ class _MockCompleted:
         self.stdout = ""
 
 
-class _MockPopen:
-    """Minimal stand-in for subprocess.Popen for run_ffsubsync tests.
+class ConsumeStderrStreamTests(unittest.TestCase):
+    """Direct unit tests for the line-parsing/progress-forwarding helper.
 
-    `stderr_lines` is the list yielded by iterating `proc.stderr`; pass
-    a single blob with embedded \\n characters to mimic line-buffered
-    output, or split it into individual ticks to simulate tqdm progress.
-    `wait()` returns `returncode`.
+    The helper is the plugin's only seam between raw stderr lines and
+    `on_progress` events; testing it in isolation keeps run_ffsubsync's
+    pty plumbing out of the way.
     """
 
-    last_call: dict = {}
+    def test_unique_percents_forwarded_in_order(self):
+        ticks = [
+            "extracting speech segments:   0%|          | 0/55",
+            "extracting speech segments:  10%|#         | 5/55",
+            "extracting speech segments:  10%|#         | 5/55",  # dup
+            "extracting speech segments:  50%|#####     | 27/55",
+            "extracting speech segments: 100%|##########| 55/55",
+            "INFO:root:offset seconds: 0.5",
+        ]
+        seen: list[int] = []
+        captured = plugin.consume_stderr_stream(iter(ticks), seen.append)
+        self.assertEqual(seen, [0, 10, 50, 100])
+        self.assertIn("offset seconds: 0.5", captured)
 
-    def __init__(self, cmd, *, returncode: int = 0, stderr_lines=None, **kwargs):
-        type(self).last_call = {"cmd": cmd, "kwargs": dict(kwargs)}
-        self._returncode = returncode
-        self.stderr = iter(stderr_lines or [])
-        self.stdout = None
+    def test_callback_exceptions_swallowed(self):
+        def boom(_pct):
+            raise RuntimeError("callback exploded")
+        captured = plugin.consume_stderr_stream(
+            iter(["extracting:  50%|...|"]), boom,
+        )
+        self.assertIn("50%", captured)
 
-    def wait(self) -> int:
-        return self._returncode
+    def test_no_callback_just_captures(self):
+        captured = plugin.consume_stderr_stream(
+            iter([
+                "extracting:  50%|...|",
+                "INFO:root:offset seconds: 0.0",
+            ]),
+            None,
+        )
+        self.assertIn("offset seconds: 0.0", captured)
 
+    def test_lines_without_progress_marker_are_ignored(self):
+        seen: list[int] = []
+        plugin.consume_stderr_stream(
+            iter([
+                "INFO:root:starting alignment",
+                "10/55 frames processed",  # no `%|` — must NOT match
+                "INFO:root:done.",
+            ]),
+            seen.append,
+        )
+        self.assertEqual(seen, [])
 
-def _popen_factory(returncode: int, stderr: str = "", stderr_lines=None):
-    """Build a side_effect callable for `subprocess.Popen`.
-
-    Either pass a `stderr` blob (split into individual lines for
-    consumption) or pre-split `stderr_lines` to simulate live tqdm
-    output.
-    """
-    if stderr_lines is None:
-        # Preserve the original blob's line endings; iterating a string
-        # in this list form is what `for line in proc.stderr` consumes.
-        stderr_lines = stderr.splitlines(keepends=True) if stderr else []
-
-    def factory(cmd, **kwargs):
-        return _MockPopen(cmd, returncode=returncode, stderr_lines=stderr_lines, **kwargs)
-
-    return factory
+    def test_pct_clamped_to_0_100(self):
+        # Defensive: regex caps at 3 digits (`(\d{1,3})`), but a stray
+        # `999%|` line shouldn't fire. Anything outside [0, 100] is
+        # rejected.
+        seen: list[int] = []
+        plugin.consume_stderr_stream(
+            iter([
+                "stage:  150%|...|",  # bogus
+                "stage:   50%|...|",  # valid
+            ]),
+            seen.append,
+        )
+        self.assertEqual(seen, [50])
 
 
 class RunFfsubsyncTests(unittest.TestCase):
+    """Sanity-check command construction and the FileNotFoundError path.
+
+    The pty + os.read plumbing is intentionally kept thin — the
+    interesting line-parsing logic is tested in
+    ConsumeStderrStreamTests above. Here we just patch out the pty +
+    Popen + line iterator and verify the argv ffsubsync would receive.
+    """
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self._tmp.name)
@@ -266,22 +302,47 @@ class RunFfsubsyncTests(unittest.TestCase):
         self.srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nHi.\n\n")
         self.tmp_out = self.dir / "Movie.en.srt.subsync.tmp.srt"
 
-    def tearDown(self):
-        self._tmp.cleanup()
+    def _stub_pty_and_read(self, returncode: int = 0, lines: list[str] | None = None):
+        """Build a context manager that patches pty.openpty + Popen +
+        the line iterator helper. Yields the captured Popen cmd."""
+        captured: dict = {}
+
+        class _Proc:
+            def wait(self_inner):
+                return returncode
+
+        def fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["kwargs"] = dict(kwargs)
+            return _Proc()
+
+        return captured, [
+            mock.patch.object(plugin.pty, "openpty", return_value=(99, 100)),
+            mock.patch.object(plugin.os, "close", lambda fd: None),
+            mock.patch.object(plugin.subprocess, "Popen", side_effect=fake_popen),
+            mock.patch.object(
+                plugin, "_iter_lines_from_fd",
+                return_value=iter(lines or []),
+            ),
+        ]
 
     def test_invokes_ffsubsync_with_expected_args(self):
-        with mock.patch.object(
-            plugin.subprocess, "Popen",
-            side_effect=_popen_factory(0, "INFO:root:offset seconds: 1.0\n"),
-        ):
+        captured, patches = self._stub_pty_and_read(
+            0, ["INFO:root:offset seconds: 1.0"],
+        )
+        for p in patches:
+            p.start()
+        try:
             rc, stderr = plugin.run_ffsubsync(
                 self.video, self.srt, self.tmp_out,
                 max_offset_seconds=60, framerate_correction=True,
             )
+        finally:
+            for p in patches:
+                p.stop()
         self.assertEqual(rc, 0)
         self.assertIn("offset seconds", stderr)
-        # Verify the args we hand-construct are correct.
-        cmd = _MockPopen.last_call["cmd"]
+        cmd = captured["cmd"]
         self.assertIn(str(self.video), cmd)
         self.assertIn("-i", cmd)
         self.assertIn(str(self.srt), cmd)
@@ -289,23 +350,26 @@ class RunFfsubsyncTests(unittest.TestCase):
         self.assertIn(str(self.tmp_out), cmd)
         self.assertIn("--max-offset-seconds", cmd)
         self.assertIn("60", cmd)
-        # framerate_correction=True ⇒ no --no-fix-framerate flag.
         self.assertNotIn("--no-fix-framerate", cmd)
 
     def test_no_fix_framerate_flag_added_when_disabled(self):
-        with mock.patch.object(
-            plugin.subprocess, "Popen",
-            side_effect=_popen_factory(0, "INFO:root:offset seconds: 0.0\n"),
-        ):
+        captured, patches = self._stub_pty_and_read(0, [])
+        for p in patches:
+            p.start()
+        try:
             plugin.run_ffsubsync(
                 self.video, self.srt, self.tmp_out,
                 max_offset_seconds=30, framerate_correction=False,
             )
-        cmd = _MockPopen.last_call["cmd"]
-        self.assertIn("--no-fix-framerate", cmd)
+        finally:
+            for p in patches:
+                p.stop()
+        self.assertIn("--no-fix-framerate", captured["cmd"])
 
     def test_filenotfound_raises_protocolerror(self):
-        with mock.patch.object(plugin.subprocess, "Popen",
+        with mock.patch.object(plugin.pty, "openpty", return_value=(99, 100)), \
+             mock.patch.object(plugin.os, "close", lambda fd: None), \
+             mock.patch.object(plugin.subprocess, "Popen",
                                side_effect=FileNotFoundError("ffsubsync")):
             with self.assertRaises(plugin.ProtocolError) as ctx:
                 plugin.run_ffsubsync(
@@ -314,75 +378,14 @@ class RunFfsubsyncTests(unittest.TestCase):
                 )
             self.assertIn("ffsubsync", str(ctx.exception).lower())
 
-    def test_on_progress_called_with_unique_percents(self):
-        # Mimics tqdm: many ticks, several with the same %, end on a
-        # parseable offset line so the caller can finish normally.
-        ticks = [
-            "extracting speech segments:   0%|          | 0/55\r",
-            "extracting speech segments:  10%|#         | 5/55\r",
-            "extracting speech segments:  10%|#         | 5/55\r",   # dup
-            "extracting speech segments:  50%|#####     | 27/55\r",
-            "extracting speech segments: 100%|##########| 55/55\n",
-            "INFO:root:offset seconds: 0.5\n",
-        ]
-        seen: list[int] = []
-        with mock.patch.object(
-            plugin.subprocess, "Popen",
-            side_effect=_popen_factory(0, stderr_lines=ticks),
-        ):
-            rc, stderr = plugin.run_ffsubsync(
-                self.video, self.srt, self.tmp_out,
-                max_offset_seconds=60, framerate_correction=True,
-                on_progress=seen.append,
-            )
-        self.assertEqual(rc, 0)
-        # Each unique percent fires exactly once, in order.
-        self.assertEqual(seen, [0, 10, 50, 100])
-        # Captured stderr blob still contains the offset line so
-        # downstream parsing works.
-        self.assertIn("offset seconds: 0.5", stderr)
 
-    def test_on_progress_callback_errors_are_swallowed(self):
-        def boom(_pct):
-            raise RuntimeError("callback exploded")
-
-        with mock.patch.object(
-            plugin.subprocess, "Popen",
-            side_effect=_popen_factory(
-                0,
-                stderr_lines=[
-                    "extracting:  50%|...|\r",
-                    "INFO:root:offset seconds: 0.0\n",
-                ],
-            ),
-        ):
-            # Should not raise.
-            rc, stderr = plugin.run_ffsubsync(
-                self.video, self.srt, self.tmp_out,
-                max_offset_seconds=60, framerate_correction=True,
-                on_progress=boom,
-            )
-        self.assertEqual(rc, 0)
-
-    def test_no_on_progress_callback_means_no_calls(self):
-        # Sanity check: omitting on_progress keeps the legacy code path
-        # quiet (no exceptions, just stderr capture).
-        with mock.patch.object(
-            plugin.subprocess, "Popen",
-            side_effect=_popen_factory(
-                0,
-                stderr_lines=[
-                    "extracting:  50%|...|\r",
-                    "INFO:root:offset seconds: 0.0\n",
-                ],
-            ),
-        ):
-            rc, stderr = plugin.run_ffsubsync(
-                self.video, self.srt, self.tmp_out,
-                max_offset_seconds=60, framerate_correction=True,
-            )
-        self.assertEqual(rc, 0)
-        self.assertIn("offset seconds: 0.0", stderr)
+def _patch_run_ffsubsync(returncode: int, stderr: str):
+    """Stub plugin.run_ffsubsync at the function boundary so align /
+    main tests don't have to think about pty plumbing."""
+    return mock.patch.object(
+        plugin, "run_ffsubsync",
+        return_value=(returncode, stderr),
+    )
 
 
 class AlignSubtitleTests(unittest.TestCase):
@@ -398,15 +401,12 @@ class AlignSubtitleTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def _patch_subprocess(self, returncode: int, stderr: str, write_tmp: bool = True):
-        """Patch subprocess.Popen to fake ffsubsync. If write_tmp, also
-        materialise the synced output so atomic_replace can find it."""
+        """Stub run_ffsubsync to fake an ffsubsync run. If write_tmp,
+        also materialise the synced output so atomic_replace can find it."""
         if write_tmp:
             tmp = self.dir / "Movie.en.srt.subsync.tmp.srt"
             tmp.write_text("SYNCED")
-        return mock.patch.object(
-            plugin.subprocess, "Popen",
-            side_effect=_popen_factory(returncode, stderr),
-        )
+        return _patch_run_ffsubsync(returncode, stderr)
 
     def test_happy_path_replaces_srt_and_returns_metadata(self):
         with self._patch_subprocess(0, "INFO:root:offset seconds: 1.234\n"):
@@ -536,10 +536,7 @@ class MainTests(unittest.TestCase):
         if write_tmp:
             tmp = self.dir / "Movie.en.srt.subsync.tmp.srt"
             tmp.write_text("SYNCED")
-        return mock.patch.object(
-            plugin.subprocess, "Popen",
-            side_effect=_popen_factory(returncode, stderr),
-        )
+        return _patch_run_ffsubsync(returncode, stderr)
 
     def test_happy_path_emits_context_set_and_replaces_srt(self):
         self.srt.write_text("ORIGINAL")
