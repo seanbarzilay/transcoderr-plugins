@@ -77,6 +77,22 @@ Notify templates can reference these fields, e.g.
 | ffsubsync exits non-zero | `error` if `fail_on_no_match: true`, else `ok` (warn + leave original) | Default warns and passes through. |
 | Offset exceeds `max_offset_seconds` | `ok` (warn + leave original) | Sanity check — large offsets usually mean ffsubsync misidentified the speech. |
 
+## Run timeline events
+
+While a sync is in progress, the plugin emits live progress lines
+parsed from ffsubsync's tqdm bars on stderr:
+
+```
+syncing: 10%
+syncing: 50%
+syncing: 100%
+```
+
+Each unique integer percent fires once. If stderr goes quiet for
+more than 10 seconds (e.g. ffsubsync is inside ffmpeg audio
+extraction with no progress reporting), a fallback `syncing...`
+heartbeat keeps the dispatcher's 30 s inter-frame timer alive.
+
 ## Runtime requirements
 
 - `python3` (the per-plugin venv installs ffsubsync via pip)
