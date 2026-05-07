@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import pty
 import re
 import subprocess
 import sys
@@ -15,7 +16,7 @@ import threading
 import time
 from glob import glob
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Iterator, Optional
 
 # Heartbeat cadence for the dispatcher's inter-frame timer. The
 # transcoderr coordinator drops a remote step that goes 30s without
@@ -196,6 +197,75 @@ def _ffsubsync_binary() -> str:
 _PROGRESS_RE = re.compile(r"(\d{1,3})%\|")
 
 
+def _iter_lines_from_fd(fd: int, *, chunk_size: int = 4096) -> Iterator[str]:
+    """Yield lines read from a raw fd, splitting on `\\r` AND `\\n`.
+
+    tqdm flushes per-tick updates with `\\r` (in-place line refresh),
+    so this generator yields once per tqdm tick rather than waiting
+    for a `\\n`. Decodes bytes as UTF-8 and replaces invalid
+    sequences (some terminal escape codes leak into stderr).
+
+    Stops when `os.read` returns empty bytes (EOF) or raises OSError
+    (pty slave closed by exited child).
+    """
+    buf = ""
+    while True:
+        try:
+            chunk = os.read(fd, chunk_size)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buf += chunk.decode("utf-8", errors="replace")
+        while True:
+            cr = buf.find("\r")
+            lf = buf.find("\n")
+            ends = [p for p in (cr, lf) if p != -1]
+            if not ends:
+                break
+            split_at = min(ends)
+            line = buf[:split_at]
+            buf = buf[split_at + 1 :]
+            yield line
+    if buf:
+        # No trailing newline — yield the remainder (rare; usually only
+        # happens when the child exits before flushing its last partial
+        # line to stderr).
+        yield buf
+
+
+def consume_stderr_stream(
+    lines: Iterable[str],
+    on_progress: Optional[Callable[[int], None]] = None,
+) -> str:
+    """Walk a stderr-line iterator; forward unique tqdm percents to the
+    callback; return the concatenated raw text for end-of-run parsing.
+
+    Repeated identical percents are de-duplicated so the run timeline
+    doesn't get a hundred copies of the same `syncing: 50%` event.
+    Callback exceptions are swallowed so a buggy caller never takes
+    the run down.
+    """
+    captured: list[str] = []
+    last_pct = -1
+    for line in lines:
+        captured.append(line)
+        if on_progress is None or not line:
+            continue
+        m = _PROGRESS_RE.search(line)
+        if not m:
+            continue
+        pct = int(m.group(1))
+        if not 0 <= pct <= 100 or pct == last_pct:
+            continue
+        last_pct = pct
+        try:
+            on_progress(pct)
+        except Exception:  # noqa: BLE001
+            pass
+    return "".join(captured)
+
+
 def run_ffsubsync(
     video_path: Path,
     srt_path: Path,
@@ -205,22 +275,21 @@ def run_ffsubsync(
     framerate_correction: bool,
     on_progress: Optional[Callable[[int], None]] = None,
 ) -> tuple[int, str]:
-    """Spawn ffsubsync; stream stderr; return (returncode, captured_stderr).
+    """Spawn ffsubsync via a pty stderr; stream tqdm progress; return
+    (returncode, captured_stderr).
 
-    The subprocess writes its synced output to `tmp_out_path`; the caller
-    is responsible for atomically renaming it over `srt_path` on success.
+    Why a pty: ffsubsync (and its `auditok` dep) wraps stderr writes in
+    `tqdm`, which (a) auto-disables when `stderr.isatty()` is False on
+    non-tty streams in some configurations, and (b) relies on `\\r`
+    flushes that libc + Python's TextIOWrapper line-buffering on a pipe
+    don't propagate in real time. Both problems disappear when stderr
+    is a pty: tqdm sees a tty, emits eagerly, and `\\r` updates land
+    in the parent fd as soon as the child writes them.
 
-    Stderr is consumed line-by-line so tqdm progress bars stream in real
-    time. Each unique integer percent parsed from a tqdm line is passed
-    to `on_progress(pct)` (when supplied). Repeated identical percents
-    are de-duplicated so the run timeline doesn't get a hundred copies
-    of the same `syncing: 50%` event. The full stderr is still captured
-    and returned so the caller can parse the offset/framerate footer
-    after exit.
-
-    `bufsize=1` + `text=True` makes the iterator yield on \\r as well as
-    \\n, which is exactly how tqdm flushes per-tick updates to a
-    non-tty pipe.
+    The subprocess writes its synced output to `tmp_out_path`; the
+    caller is responsible for atomically renaming it over `srt_path`
+    on success. Each unique integer percent parsed out of a tqdm line
+    is passed to `on_progress(pct)` (when supplied).
     """
     cmd = [
         _ffsubsync_binary(),
@@ -232,43 +301,37 @@ def run_ffsubsync(
     if not framerate_correction:
         cmd.append("--no-fix-framerate")
 
+    master_fd, slave_fd = pty.openpty()
     try:
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
+            stderr=slave_fd,
+            close_fds=True,
         )
     except FileNotFoundError as exc:
+        os.close(master_fd)
+        os.close(slave_fd)
         raise ProtocolError(
             f"ffsubsync not on path at {_ffsubsync_binary()} "
             f"(plugin install incomplete?)"
         ) from exc
 
-    stderr_lines: list[str] = []
-    last_pct = -1
-    if proc.stderr is not None:
-        for line in proc.stderr:
-            stderr_lines.append(line)
-            if on_progress is None:
-                continue
-            m = _PROGRESS_RE.search(line)
-            if not m:
-                continue
-            pct = int(m.group(1))
-            if not 0 <= pct <= 100 or pct == last_pct:
-                continue
-            last_pct = pct
-            try:
-                on_progress(pct)
-            except Exception:  # noqa: BLE001
-                # A misbehaving callback must never take the run down.
-                pass
+    # The child inherited a copy of slave_fd; close ours so reads from
+    # master_fd return EOF when the child exits.
+    os.close(slave_fd)
+
+    try:
+        captured = consume_stderr_stream(
+            _iter_lines_from_fd(master_fd),
+            on_progress,
+        )
+    finally:
+        os.close(master_fd)
 
     rc = proc.wait()
-    return rc, "".join(stderr_lines)
+    return rc, captured
 
 
 # ---- High-level align orchestration ------------------------------------
