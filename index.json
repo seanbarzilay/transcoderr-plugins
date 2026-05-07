@@ -20,10 +20,10 @@
     },
     {
       "name": "subsync",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "summary": "Aligns an out-of-sync .srt to the audio of a video file using ffsubsync (VAD-based).",
-      "tarball_url": "https://raw.githubusercontent.com/seanbarzilay/transcoderr-plugins/main/tarballs/subsync-0.1.2.tar.gz",
-      "tarball_sha256": "eb4a94373370574525aac1d7a173e786a1025f12ef3e82fbb8b8a0794502313a",
+      "tarball_url": "https://raw.githubusercontent.com/seanbarzilay/transcoderr-plugins/main/tarballs/subsync-0.1.3.tar.gz",
+      "tarball_sha256": "30bc7a06269eb9170a4d86da6ea21d31ee23405ba39b81c5924189ac65f0e601",
       "homepage": "https://github.com/seanbarzilay/transcoderr-plugins/tree/main/subsync",
       "min_transcoderr_version": "0.27.0",
       "kind": "subprocess",
